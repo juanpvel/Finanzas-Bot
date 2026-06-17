@@ -1,10 +1,10 @@
 import json
 from datetime import datetime
+import os
 
 import gspread
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
-import os
 
 
 # ==========================
@@ -12,9 +12,7 @@ import os
 # ==========================
 
 API_KEY = os.environ.get("GEMINI_API_KEY")
-
 NOMBRE_DOCUMENTO = "Cuentas Personales - Pruebas Python - Junio 2026"
-ARCHIVO_CREDENCIALES = "asistente-finanzas-499718-bf933bb92551.json"
 
 
 # ==========================
@@ -25,7 +23,7 @@ genai.configure(api_key=API_KEY)
 
 
 # ==========================
-# GOOGLE SHEETS
+# GOOGLE SHEETS (SIN ARCHIVO LOCAL)
 # ==========================
 
 scopes = [
@@ -33,8 +31,10 @@ scopes = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-creds = Credentials.from_service_account_file(
-    ARCHIVO_CREDENCIALES,
+creds_info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
+
+creds = Credentials.from_service_account_info(
+    creds_info,
     scopes=scopes
 )
 
@@ -47,7 +47,7 @@ ingresos_sheet = documento.worksheet("Ingresos")
 
 
 # ==========================
-# FUNCIÓN PRINCIPAL
+# FUNCIÓN PRINCIPAL (WHATSAPP)
 # ==========================
 
 def procesar_mensaje(mensaje):
@@ -55,10 +55,21 @@ def procesar_mensaje(mensaje):
     prompt = f"""
 Extrae información financiera del mensaje.
 
-Devuelve SOLO JSON en lista.
+Devuelve SOLO una lista JSON.
 
 Mensaje:
 {mensaje}
+
+Formato:
+[
+  {{
+    "tipo": "Gasto o Ingreso",
+    "categoria": "",
+    "descripcion": "",
+    "monto": 0,
+    "cuenta": "Nequi / Nu / Davivienda / Bancolombia / Efectivo / Splitwise / No especificada"
+  }}
+]
 """
 
     response = genai.GenerativeModel(
