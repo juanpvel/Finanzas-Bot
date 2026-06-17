@@ -3,14 +3,15 @@ from datetime import datetime
 
 import gspread
 from google.oauth2.service_account import Credentials
-from google import genai
+import google.generativeai as genai
+import os
 
 
 # ==========================
 # CONFIG
 # ==========================
 
-API_KEY = "TU_API_KEY"
+API_KEY = os.environ.get("GEMINI_API_KEY")
 
 NOMBRE_DOCUMENTO = "Cuentas Personales - Pruebas Python - Junio 2026"
 ARCHIVO_CREDENCIALES = "asistente-finanzas-499718-bf933bb92551.json"
@@ -20,7 +21,7 @@ ARCHIVO_CREDENCIALES = "asistente-finanzas-499718-bf933bb92551.json"
 # GEMINI
 # ==========================
 
-gemini = genai.Client(api_key=API_KEY)
+genai.configure(api_key=API_KEY)
 
 
 # ==========================
@@ -46,7 +47,7 @@ ingresos_sheet = documento.worksheet("Ingresos")
 
 
 # ==========================
-# FUNCIÓN PRINCIPAL (WHATSAPP)
+# FUNCIÓN PRINCIPAL
 # ==========================
 
 def procesar_mensaje(mensaje):
@@ -60,10 +61,9 @@ Mensaje:
 {mensaje}
 """
 
-    response = gemini.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt
-    )
+    response = genai.GenerativeModel(
+        "gemini-2.5-flash"
+    ).generate_content(prompt)
 
     texto = response.text.replace("```json", "").replace("```", "").strip()
 
