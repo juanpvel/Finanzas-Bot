@@ -6,66 +6,43 @@ from Finanzas_bot import procesar_mensaje
 
 app = Flask(__name__)
 
-VERIFY_TOKEN = "mi_bot_whatsapp_123"
-
-WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 
-@app.route("/webhook", methods=["GET", "POST"])
+def enviar_mensaje(chat_id, texto):
+    url = f"{BASE_URL}/sendMessage"
+    requests.post(url, data={
+        "chat_id": chat_id,
+        "text": texto
+    })
+
+
+@app.route("/webhook", methods=["POST"])
 def webhook():
-    if request.method == "GET":
-        mode = request.args.get("hub.mode")
-        token = request.args.get("hub.verify_token")
-        challenge = request.args.get("hub.challenge")
+    print("🔥 Telegram webhook recibido")
 
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            return challenge
-        return "Error", 403
+    data = request.get_json()
 
-    if request.method == "POST":
-        print("🔥 WEBHOOK POST")
-
-        data = request.get_json()
-
-        try:
-            value = data["entry"][0]["changes"][0]["value"]
-
-            if "messages" not in value:
-                return "OK", 200
-
-            message = value["messages"][0]["text"]["body"]
-            sender = value["messages"][0]["from"]
-
-            print("📩", message)
-
-            respuesta = procesar_mensaje(message)
-
-            enviar_mensaje(sender, respuesta)
-
+    try:
+        message = data.get("message")
+        if not message:
             return "OK", 200
 
-        except Exception as e:
-            print("ERROR:", e)
-            return "OK", 200
+        text = message.get("text", "")
+        chat_id = message["chat"]["id"]
 
+        print("📩", text)
 
-def enviar_mensaje(numero, texto):
-    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+        respuesta = procesar_mensaje(text)
 
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
+        enviar_mensaje(chat_id, respuesta)
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": numero,
-        "type": "text",
-        "text": {"body": texto}
-    }
+        return "OK", 200
 
-    requests.post(url, headers=headers, json=payload)
+    except Exception as e:
+        print("ERROR:", e)
+        return "OK", 200
 
 
 if __name__ == "__main__":
