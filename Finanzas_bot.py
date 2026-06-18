@@ -128,7 +128,7 @@ Clases:
 Ingresos por clases independientes o en la universidad del bosque.
 
 Juan Pablo Luna:
-Ingresos artísticos por el proyecto personal, ya sea por MERCH o conciertos con Juan Pablo Luna.
+Ingresos artísticos por el proyecto personal, ya sea por MERCH o conciertos.
 
 Audio:
 Producción musical o de audio para terceros.
@@ -147,7 +147,7 @@ Bancolombia
 REGLAS:
 
 - Devuelve SOLO una lista JSON
-- Puede haber uno o varios movimientos
+- Puede haber uno o varios movimientos en una sola frase
 - Si no hay cuenta: "No especificada"
 - 18 lucas → 18000
 - 50k → 50000
@@ -165,8 +165,8 @@ scopes = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-creds = Credentials.from_service_account_file(
-    os.environ["GOOGLE_CREDENTIALS_JSON_PATH"],
+creds = Credentials.from_service_account_info(
+    json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"]),
     scopes=scopes
 )
 
@@ -193,12 +193,13 @@ cuentas_validas = {
 
 
 # ==========================
-# UTIL: JSON ROBUSTO
+# JSON ROBUSTO (CLAVE)
 # ==========================
 
 def extraer_json(texto: str):
     texto = texto.replace("```json", "").replace("```", "").strip()
 
+    # soporta múltiples bloques
     start = texto.find("[")
     end = texto.rfind("]")
 
@@ -209,7 +210,7 @@ def extraer_json(texto: str):
 
 
 # ==========================
-# FALLBACK
+# FALLBACK INTELIGENTE
 # ==========================
 
 def reparar(mensaje, d):
@@ -231,7 +232,7 @@ def reparar(mensaje, d):
 def guardar(d):
     fecha = datetime.now().strftime("%Y-%m-%d")
 
-    cuenta = d.get("cuenta", "No especificada").lower()
+    cuenta = d.get("cuenta", "No especificada").lower().strip()
     cuenta = cuentas_validas.get(cuenta, "No especificada")
 
     fila = [
@@ -242,16 +243,18 @@ def guardar(d):
         cuenta
     ]
 
-    if d.get("tipo", "").lower() == "gasto":
-        gastos_sheet.append_row(fila)
-    else:
+    tipo = d.get("tipo", "gasto").lower()
+
+    if tipo == "ingreso":
         ingresos_sheet.append_row(fila)
+    else:
+        gastos_sheet.append_row(fila)
 
     return {**d, "cuenta": cuenta}
 
 
 # ==========================
-# GEMINI
+# GEMINI (MEJORADO PARA FRASES COMPLEJAS)
 # ==========================
 
 def llamar_gemini(mensaje):
@@ -260,12 +263,15 @@ def llamar_gemini(mensaje):
     prompt = f"""
 {contexto_usuario}
 
-Extrae movimientos financieros.
+IMPORTANTE:
+- Un solo mensaje puede contener varios movimientos separados por tiempo (ayer, hoy, etc.)
+- Ejemplo: "ayer gasté 20k en café y hoy 30k en transporte"
+- Debes devolver UN MOVIMIENTO POR CADA ACCIÓN
 
 Regla clave:
 - Si NO dice ingreso explícito → asumir GASTO
 
-Devuelve SOLO lista JSON.
+Devuelve SOLO JSON lista.
 
 Mensaje:
 {mensaje}
@@ -320,7 +326,7 @@ def procesar_mensaje(mensaje, chat_id=None):
             if not d.get("tipo"):
                 d["tipo"] = "gasto"
 
-            cuenta = d.get("cuenta", "No especificada").lower()
+            cuenta = d.get("cuenta", "No especificada").lower().strip()
             cuenta = cuentas_validas.get(cuenta, "No especificada")
             d["cuenta"] = cuenta
 
@@ -332,7 +338,7 @@ def procesar_mensaje(mensaje, chat_id=None):
             resultados.append(saved)
 
         if not resultados:
-            return "⚠️ No pude extraer ningún movimiento"
+            return "⚠️ No pude detectar movimientos"
 
         return "\n\n".join([
             f"""🧾 Movimiento
@@ -345,4 +351,4 @@ def procesar_mensaje(mensaje, chat_id=None):
 
     except Exception as e:
         print("❌ ERROR:", str(e))
-        return "⚠️ Error procesando mensaje. Intenta de nuevo con un formato más claro."
+        return "⚠️ Error procesando mensaje. Intenta reformularlo (ej: 'gasté 20k en café')"
