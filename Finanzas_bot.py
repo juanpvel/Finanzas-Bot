@@ -13,7 +13,7 @@ import google.generativeai as genai
 # ==========================
 
 API_KEY = os.environ.get("GEMINI_API_KEY")
-NOMBRE_DOCUMENTO = "Cuentas Personales"  # 🔥 CAMBIO AQUÍ
+SHEET_ID = os.environ.get("SHEET_ID")
 
 genai.configure(api_key=API_KEY)
 
@@ -170,9 +170,7 @@ creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
 
 client = gspread.authorize(creds)
 
-SHEET_ID = os.environ.get("SHEET_ID")
-
-doc = client.open_by_key(SHEET_ID)  # 🔥 SOLO CAMBIA EL NOMBRE DEL SHEET
+doc = client.open_by_key(SHEET_ID)
 
 gastos_sheet = doc.worksheet("Gastos")
 ingresos_sheet = doc.worksheet("Ingresos")
@@ -193,7 +191,7 @@ cuentas_validas = {
 
 
 # ==========================
-# PARSER ROBUSTO JSON
+# UTIL: JSON ROBUSTO
 # ==========================
 
 def extraer_json(texto: str):
@@ -204,21 +202,23 @@ def extraer_json(texto: str):
         start = texto.find("[")
         end = texto.rfind("]")
 
-        if start == -1 or end == -1:
-            raise ValueError("No JSON found")
+        if start == -1 or end == -1 or end <= start:
+            print("⚠️ No JSON detectado:", texto)
+            return []
 
         return json.loads(texto[start:end + 1])
 
     except Exception as e:
-        print("❌ RAW FALLIDO:", texto)
-        raise ValueError(f"JSON error: {str(e)}")
+        print("🔥 JSON ERROR:", repr(e))
+        print("RAW:", texto)
+        return []
 
 
 # ==========================
-# DETECCIÓN INGRESO/GASTO
+# TIPO AUTOMÁTICO
 # ==========================
 
-def forzar_tipo(mensaje: str, tipo_gemini: str):
+def forzar_tipo(mensaje: str):
     texto = mensaje.lower()
 
     ingresos_keywords = [
@@ -226,14 +226,11 @@ def forzar_tipo(mensaje: str, tipo_gemini: str):
         "recibí", "me pagaron", "me consignaron", "me depositaron"
     ]
 
-    if any(k in texto for k in ingresos_keywords):
-        return "ingreso"
-
-    return "gasto"
+    return "ingreso" if any(k in texto for k in ingresos_keywords) else "gasto"
 
 
 # ==========================
-# FALLBACK MONTOS/DESCRIPCIÓN
+# FALLBACK DATOS
 # ==========================
 
 def reparar_datos(mensaje, d):
@@ -249,10 +246,12 @@ def reparar_datos(mensaje, d):
 
 
 # ==========================
-# GUARDAR
+# GUARDAR EN SHEETS (ROBUSTO)
 # ==========================
 
 def guardar_movimiento(d):
+    print("📊 Guardando:", d)
+
     fecha = datetime.now().strftime("%Y-%m-%d")
 
     cuenta = d.get("cuenta", "No especificada").lower().strip()
@@ -266,10 +265,15 @@ def guardar_movimiento(d):
         cuenta
     ]
 
-    if d.get("tipo") == "gasto":
-        gastos_sheet.append_row(fila)
-    else:
-        ingresos_sheet.append_row(fila)
+    try:
+        if d.get("tipo") == "gasto":
+            gastos_sheet.append_row(fila)
+        else:
+            ingresos_sheet.append_row(fila)
+
+    except Exception as e:
+        print("🔥 ERROR SHEETS:", repr(e))
+        raise e
 
     return {
         "fecha": fecha,
@@ -287,20 +291,31 @@ def procesar_mensaje(mensaje, chat_id=None):
     try:
         print("📥 MENSAJE:", mensaje)
 
+        # ==========================
+        # CUENTA PENDIENTE
+        # ==========================
         if chat_id and chat_id in pending_movements:
             movimiento = pending_movements.pop(chat_id)
 
-            cuenta = mensaje.lower().strip()
-            movimiento["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
+            movimiento["cuenta"] = cuentas_validas.get(
+                mensaje.lower().strip(),
+                "No especificada"
+            )
 
             movimiento = reparar_datos(mensaje, movimiento)
             recibido = guardar_movimiento(movimiento)
 
-            return f"""✅ Cuenta registrada y movimiento guardado
+            return (
+                "✅ Cuenta registrada y movimiento guardado\n\n"
+                f"🧾 {recibido['descripcion']}\n"
+                f"💰 {recibido['monto']}\n"
+                f"🏦 {recibido['cuenta']}"
+            )
 
-🧾 {recibido['descripcion']}
-💰 {recibido['monto']}
-🏦 {recibido['cuenta']}"""
+        # ==========================
+        # GEMINI
+        # ==========================
+        model = genai.GenerativeModel("gemini-2.5-flash")
 
         prompt = f"""
 {contexto_usuario}
@@ -313,7 +328,6 @@ Mensaje:
 {mensaje}
 """
 
-        model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt)
 
         raw = response.text.strip()
@@ -321,12 +335,15 @@ Mensaje:
 
         movimientos = extraer_json(raw)
 
+        if not movimientos:
+            return "⚠️ No entendí el mensaje. Ej: gasto cafe 2000 bancolombia"
+
         resultados = []
 
         for d in movimientos:
 
             d = reparar_datos(mensaje, d)
-            d["tipo"] = forzar_tipo(mensaje, d.get("tipo", ""))
+            d["tipo"] = forzar_tipo(mensaje)
 
             cuenta = d.get("cuenta", "No especificada").lower().strip()
             d["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
@@ -348,5 +365,5 @@ Mensaje:
         ])
 
     except Exception as e:
-        print("❌ ERROR:", str(e))
-        return "❌ Error procesando mensaje"
+        print("🔥 ERROR FINAL:", repr(e))
+        return "⚠️ Error procesando mensaje. Intenta de nuevo con un formato más claro."
