@@ -128,7 +128,7 @@ Clases:
 Ingresos por clases independientes o en la universidad del bosque.
 
 Juan Pablo Luna:
-Ingresos artísticos por el proyecto personal, ya sea por MERCH o conciertos.
+Ingresos artísticos por el proyecto personal.
 
 Audio:
 Producción musical o de audio para terceros.
@@ -147,7 +147,7 @@ Bancolombia
 REGLAS:
 
 - Devuelve SOLO una lista JSON
-- Puede haber uno o varios movimientos en una sola frase
+- Puede haber uno o varios movimientos
 - Si no hay cuenta: "No especificada"
 - 18 lucas → 18000
 - 50k → 50000
@@ -193,27 +193,42 @@ cuentas_validas = {
 
 
 # ==========================
-# JSON ROBUSTO (CLAVE)
+# JSON PARSER ULTRA ROBUSTO
 # ==========================
 
 def extraer_json(texto: str):
-    texto = texto.replace("```json", "").replace("```", "").strip()
+    try:
+        texto = (texto or "").strip()
+        texto = texto.replace("```json", "").replace("```", "")
 
-    # soporta múltiples bloques
-    start = texto.find("[")
-    end = texto.rfind("]")
+        start = texto.find("[")
+        end = texto.rfind("]")
 
-    if start == -1 or end == -1:
-        raise ValueError(f"No JSON found: {texto}")
+        if start == -1 or end == -1:
+            print("❌ RAW SIN JSON:", texto)
+            raise ValueError("No JSON array found")
 
-    return json.loads(texto[start:end + 1])
+        return json.loads(texto[start:end + 1])
+
+    except Exception as e:
+        print("❌ JSON FALLIDO RAW:", texto)
+        raise ValueError(f"JSON parse error: {repr(e)}")
 
 
 # ==========================
-# FALLBACK INTELIGENTE
+# FALLBACK DE DATOS
 # ==========================
 
 def reparar(mensaje, d):
+    if not isinstance(d, dict):
+        return {
+            "tipo": "gasto",
+            "categoria": "",
+            "descripcion": mensaje,
+            "monto": 0,
+            "cuenta": "No especificada"
+        }
+
     if not d.get("descripcion"):
         d["descripcion"] = mensaje
 
@@ -226,13 +241,13 @@ def reparar(mensaje, d):
 
 
 # ==========================
-# GUARDAR
+# GUARDAR EN SHEETS
 # ==========================
 
 def guardar(d):
     fecha = datetime.now().strftime("%Y-%m-%d")
 
-    cuenta = d.get("cuenta", "No especificada").lower().strip()
+    cuenta = (d.get("cuenta") or "No especificada").lower().strip()
     cuenta = cuentas_validas.get(cuenta, "No especificada")
 
     fila = [
@@ -243,7 +258,7 @@ def guardar(d):
         cuenta
     ]
 
-    tipo = d.get("tipo", "gasto").lower()
+    tipo = (d.get("tipo") or "gasto").lower()
 
     if tipo == "ingreso":
         ingresos_sheet.append_row(fila)
@@ -254,7 +269,7 @@ def guardar(d):
 
 
 # ==========================
-# GEMINI (MEJORADO PARA FRASES COMPLEJAS)
+# GEMINI
 # ==========================
 
 def llamar_gemini(mensaje):
@@ -264,12 +279,11 @@ def llamar_gemini(mensaje):
 {contexto_usuario}
 
 IMPORTANTE:
-- Un solo mensaje puede contener varios movimientos separados por tiempo (ayer, hoy, etc.)
-- Ejemplo: "ayer gasté 20k en café y hoy 30k en transporte"
-- Debes devolver UN MOVIMIENTO POR CADA ACCIÓN
+- Un mensaje puede tener múltiples movimientos (ej: ayer gasté 20k en café y hoy 30k en transporte)
+- Divide cada acción en un objeto separado
 
-Regla clave:
-- Si NO dice ingreso explícito → asumir GASTO
+REGLA CRÍTICA:
+- Si NO dice "ingreso", asumir "gasto"
 
 Devuelve SOLO JSON lista.
 
@@ -278,7 +292,7 @@ Mensaje:
 """
 
     response = model.generate_content(prompt)
-    return response.text
+    return response.text or ""
 
 
 # ==========================
@@ -288,7 +302,7 @@ Mensaje:
 def procesar_mensaje(mensaje, chat_id=None):
 
     try:
-        print("📥", mensaje)
+        print("📥 MENSAJE:", mensaje)
 
         # ======================
         # CUENTA PENDIENTE
@@ -297,7 +311,7 @@ def procesar_mensaje(mensaje, chat_id=None):
         if chat_id and chat_id in pending_movements:
             mov = pending_movements.pop(chat_id)
 
-            mov["cuenta"] = cuentas_validas.get(mensaje.lower(), "No especificada")
+            mov["cuenta"] = cuentas_validas.get(mensaje.lower().strip(), "No especificada")
 
             mov = reparar(mensaje, mov)
             saved = guardar(mov)
@@ -313,9 +327,12 @@ def procesar_mensaje(mensaje, chat_id=None):
         # ======================
 
         raw = llamar_gemini(mensaje)
-        print("🤖 RAW:", raw)
+        print("🤖 GEMINI RAW:", raw)
 
         movimientos = extraer_json(raw)
+
+        if isinstance(movimientos, dict):
+            movimientos = [movimientos]
 
         resultados = []
 
@@ -326,11 +343,10 @@ def procesar_mensaje(mensaje, chat_id=None):
             if not d.get("tipo"):
                 d["tipo"] = "gasto"
 
-            cuenta = d.get("cuenta", "No especificada").lower().strip()
-            cuenta = cuentas_validas.get(cuenta, "No especificada")
-            d["cuenta"] = cuenta
+            cuenta = (d.get("cuenta") or "No especificada").lower().strip()
+            d["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
 
-            if cuenta == "No especificada" and chat_id:
+            if d["cuenta"] == "No especificada" and chat_id:
                 pending_movements[chat_id] = d
                 return "🤔 ¿Qué cuenta fue? (Nequi, Nu, Davivienda, Bancolombia, Efectivo, Splitwise)"
 
@@ -338,17 +354,17 @@ def procesar_mensaje(mensaje, chat_id=None):
             resultados.append(saved)
 
         if not resultados:
-            return "⚠️ No pude detectar movimientos"
+            return "⚠️ No se detectaron movimientos"
 
         return "\n\n".join([
             f"""🧾 Movimiento
-📂 {r['categoria']}
-📝 {r['descripcion']}
-💰 {r['monto']}
-🏦 {r['cuenta']}"""
+📂 {r.get('categoria','')}
+📝 {r.get('descripcion','')}
+💰 {r.get('monto','')}
+🏦 {r.get('cuenta','')}"""
             for r in resultados
         ])
 
     except Exception as e:
-        print("❌ ERROR:", str(e))
-        return "⚠️ Error procesando mensaje. Intenta reformularlo (ej: 'gasté 20k en café')"
+        print("❌ ERROR COMPLETO:", repr(e))
+        return "⚠️ Error procesando mensaje. Intenta de nuevo con algo como: 'gasté 20k en café'"
