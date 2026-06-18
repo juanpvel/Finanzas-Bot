@@ -13,17 +13,18 @@ BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 def enviar_mensaje(chat_id, texto):
     if not TELEGRAM_TOKEN:
-        print("❌ ERROR: TELEGRAM_TOKEN no está cargado")
+        print("❌ TELEGRAM_TOKEN no cargado")
         return
 
-    url = f"{BASE_URL}/sendMessage"
-
     try:
-        r = requests.post(url, data={
-            "chat_id": chat_id,
-            "text": texto
-        })
-        print("📤 Mensaje enviado:", r.status_code, r.text)
+        r = requests.post(
+            f"{BASE_URL}/sendMessage",
+            data={
+                "chat_id": chat_id,
+                "text": texto
+            }
+        )
+        print("📤 RESPUESTA TELEGRAM:", r.status_code, r.text)
     except Exception as e:
         print("❌ ERROR enviando mensaje:", e)
 
@@ -39,40 +40,58 @@ def webhook():
     print("\n🔥🔥 WEBHOOK RECIBIDO")
 
     try:
-        # 🔥 Raw request (lo que realmente llega)
-        raw = request.data
-        print("📦 RAW:", raw)
-
         data = request.get_json(force=True, silent=True)
 
-        print("📨 JSON:", json.dumps(data, indent=2))
+        print("📦 RAW:", request.data)
+
+        print("📨 JSON:", json.dumps(data, indent=2, ensure_ascii=False))
 
         if not data:
-            print("⚠️ No JSON recibido")
+            print("⚠️ No data recibida")
             return "OK", 200
 
-        # 🔥 Captura TODOS los tipos posibles
-        message = (
-            data.get("message")
-            or data.get("edited_message")
-            or data.get("channel_post")
-        )
+        print("🔑 KEYS:", list(data.keys()))
+
+        # 🔥 EXTRACCIÓN ROBUSTA DE MENSAJE
+        message = None
+        chat_id = None
+        text = None
+
+        # CASO 1: mensaje normal
+        if "message" in data:
+            message = data["message"]
+
+        # CASO 2: editado
+        elif "edited_message" in data:
+            message = data["edited_message"]
+
+        # CASO 3: canal
+        elif "channel_post" in data:
+            message = data["channel_post"]
+
+        # CASO 4: callback (botones)
+        elif "callback_query" in data:
+            message = data["callback_query"].get("message")
 
         if not message:
-            print("⚠️ Update sin message:", data)
+            print("⚠️ No message encontrado en update")
             return "OK", 200
 
-        text = message.get("text", "")
         chat_id = message.get("chat", {}).get("id")
+        text = message.get("text")
 
-        print("📩 TEXTO:", text)
+        print("📩 TEXT:", text)
         print("👤 CHAT ID:", chat_id)
 
-        if not text:
-            print("⚠️ Mensaje sin texto")
+        if not chat_id:
+            print("⚠️ Sin chat_id")
             return "OK", 200
 
-        # 🔥 tu lógica de negocio
+        if not text:
+            print("⚠️ Mensaje sin texto (posible sticker, audio, etc.)")
+            text = ""
+
+        # 🔥 TU LÓGICA
         respuesta = procesar_mensaje(text)
 
         print("🤖 RESPUESTA:", respuesta)
