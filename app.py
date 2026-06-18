@@ -12,62 +12,77 @@ BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 
 def enviar_mensaje(chat_id, texto):
+    if not TELEGRAM_TOKEN:
+        print("❌ ERROR: TELEGRAM_TOKEN no está cargado")
+        return
+
     url = f"{BASE_URL}/sendMessage"
 
     try:
-        requests.post(url, data={
+        r = requests.post(url, data={
             "chat_id": chat_id,
             "text": texto
         })
+        print("📤 Mensaje enviado:", r.status_code, r.text)
     except Exception as e:
         print("❌ ERROR enviando mensaje:", e)
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return "Bot activo 🚀", 200
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
-    print("\n🔥🔥 WEBHOOK HIT (TELEGRAM LLEGÓ)")
+    print("\n🔥🔥 WEBHOOK RECIBIDO")
 
     try:
-        # 🔥 ver exactamente qué llega
+        # 🔥 Raw request (lo que realmente llega)
         raw = request.data
         print("📦 RAW:", raw)
 
         data = request.get_json(force=True, silent=True)
-        print("📨 JSON PARSED:", json.dumps(data, indent=2))
+
+        print("📨 JSON:", json.dumps(data, indent=2))
 
         if not data:
             print("⚠️ No JSON recibido")
             return "OK", 200
 
-        message = data.get("message")
+        # 🔥 Captura TODOS los tipos posibles
+        message = (
+            data.get("message")
+            or data.get("edited_message")
+            or data.get("channel_post")
+        )
 
         if not message:
             print("⚠️ Update sin message:", data)
             return "OK", 200
 
         text = message.get("text", "")
-        chat_id = message["chat"]["id"]
+        chat_id = message.get("chat", {}).get("id")
 
         print("📩 TEXTO:", text)
         print("👤 CHAT ID:", chat_id)
 
+        if not text:
+            print("⚠️ Mensaje sin texto")
+            return "OK", 200
+
+        # 🔥 tu lógica de negocio
         respuesta = procesar_mensaje(text)
 
         print("🤖 RESPUESTA:", respuesta)
 
         enviar_mensaje(chat_id, respuesta)
 
-        return "OK", 200
-
     except Exception as e:
         print("❌ ERROR GENERAL:", str(e))
-        return "OK", 200
 
-
-@app.route("/", methods=["GET"])
-def home():
-    return "Bot activo 🚀", 200
+    return "OK", 200
 
 
 if __name__ == "__main__":
