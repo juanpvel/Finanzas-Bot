@@ -12,30 +12,35 @@ app = Flask(__name__)
 # ==========================
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+
+if not TELEGRAM_TOKEN:
+    print("❌ FALTA TELEGRAM_TOKEN EN VARIABLES DE ENTORNO")
+
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 
 # ==========================
-# ENVIAR MENSAJE TELEGRAM
+# TELEGRAM SEND
 # ==========================
 
 def enviar_mensaje(chat_id, texto):
-    if not TELEGRAM_TOKEN:
-        print("❌ TELEGRAM_TOKEN no cargado")
-        return
-
     try:
-        r = requests.post(
-            f"{BASE_URL}/sendMessage",
-            data={
-                "chat_id": chat_id,
-                "text": texto
-            }
-        )
-        print("📤 TELEGRAM RESPONSE:", r.status_code, r.text)
+        url = f"{BASE_URL}/sendMessage"
+
+        payload = {
+            "chat_id": chat_id,
+            "text": texto
+        }
+
+        r = requests.post(url, data=payload, timeout=10)
+
+        print("📤 Telegram response:", r.status_code)
+
+        if r.status_code != 200:
+            print("⚠️ Telegram error:", r.text)
 
     except Exception as e:
-        print("❌ ERROR enviando mensaje:", e)
+        print("❌ Error enviando mensaje:", str(e))
 
 
 # ==========================
@@ -48,66 +53,50 @@ def home():
 
 
 # ==========================
-# WEBHOOK TELEGRAM
+# WEBHOOK
 # ==========================
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
-    print("\n🔥 WEBHOOK RECIBIDO")
-
     try:
         data = request.get_json(force=True, silent=True)
 
+        print("\n🔥 WEBHOOK RECIBIDO")
+        print("📦 DATA:", json.dumps(data, indent=2))
+
         if not data:
-            print("⚠️ No data recibida")
             return "OK", 200
 
-        print("📨 UPDATE:", json.dumps(data, indent=2, ensure_ascii=False))
-
-        # ==========================
-        # EXTRAER MENSAJE
-        # ==========================
-
-        message = (
-            data.get("message")
-            or data.get("edited_message")
-            or data.get("channel_post")
-            or (data.get("callback_query") or {}).get("message")
-        )
+        message = data.get("message") or data.get("edited_message")
 
         if not message:
-            print("⚠️ Update sin message")
             return "OK", 200
 
-        text = message.get("text", "")
+        text = message.get("text")
         chat_id = message.get("chat", {}).get("id")
 
-        print("📩 TEXT:", text)
-        print("👤 CHAT ID:", chat_id)
-
-        if not chat_id:
-            print("⚠️ Sin chat_id")
+        if not text or not chat_id:
             return "OK", 200
 
+        print("📩 Mensaje:", text)
+        print("👤 Chat:", chat_id)
+
         # ==========================
-        # PROCESAR MENSAJE
+        # BOT CORE
         # ==========================
 
         respuesta = procesar_mensaje(text, chat_id)
 
-        print("🤖 RESPUESTA:", respuesta)
-
-        # ==========================
-        # RESPONDER
-        # ==========================
+        print("🤖 Respuesta:", respuesta)
 
         enviar_mensaje(chat_id, respuesta)
 
-    except Exception as e:
-        print("❌ ERROR GENERAL:", str(e))
+        return "OK", 200
 
-    return "OK", 200
+    except Exception as e:
+        print("❌ ERROR WEBHOOK:", str(e))
+        return "OK", 200
 
 
 # ==========================
