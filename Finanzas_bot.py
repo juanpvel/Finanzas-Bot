@@ -170,7 +170,9 @@ creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
 
 client = gspread.authorize(creds)
 
-doc = client.open(NOMBRE_DOCUMENTO)  # 🔥 SOLO CAMBIA EL NOMBRE DEL SHEET
+SHEET_ID = os.environ.get("SHEET_ID")
+
+doc = client.open_by_key(SHEET_ID)  # 🔥 SOLO CAMBIA EL NOMBRE DEL SHEET
 
 gastos_sheet = doc.worksheet("Gastos")
 ingresos_sheet = doc.worksheet("Ingresos")
