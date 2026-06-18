@@ -18,6 +18,7 @@ GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 
 client_genai = genai.Client(api_key=API_KEY)
 
+
 # ==========================
 # MEMORIA SIMPLE
 # ==========================
@@ -201,7 +202,8 @@ def extraer_json(texto: str):
     end = texto.rfind("]")
 
     if start == -1 or end == -1:
-        raise ValueError("No JSON encontrado")
+        print("❌ RESPUESTA GEMINI SIN JSON:", texto)
+        raise ValueError("No JSON array found")
 
     return json.loads(texto[start:end + 1])
 
@@ -223,10 +225,10 @@ def reparar(mensaje, d):
 
 
 # ==========================
-# DETECTAR INGRESO / GASTO
+# TIPO AUTOMÁTICO
 # ==========================
 
-def forzar_tipo(mensaje, tipo):
+def forzar_tipo(mensaje):
     texto = mensaje.lower()
 
     ingresos = [
@@ -234,14 +236,11 @@ def forzar_tipo(mensaje, tipo):
         "me entró", "me entro", "me pagaron", "me consignaron", "me depositaron"
     ]
 
-    if any(k in texto for k in ingresos):
-        return "ingreso"
-
-    return "gasto"
+    return "ingreso" if any(k in texto for k in ingresos) else "gasto"
 
 
 # ==========================
-# GUARDAR
+# GUARDAR EN SHEETS
 # ==========================
 
 def guardar(d):
@@ -257,6 +256,8 @@ def guardar(d):
         d.get("monto", 0),
         cuenta
     ]
+
+    print("📤 GUARDANDO:", fila)
 
     if d.get("tipo") == "gasto":
         gastos_sheet.append_row(fila)
@@ -277,7 +278,7 @@ def llamar_gemini(mensaje):
 Extrae movimientos financieros.
 
 Reglas:
-- Si no dice ingreso explícito → asumir gasto
+- Si NO dice ingreso explícito → asumir gasto
 - Puede haber múltiples movimientos
 
 Devuelve SOLO JSON (lista).
@@ -291,6 +292,9 @@ Mensaje:
         contents=prompt
     )
 
+    if not response or not response.text:
+        raise ValueError("Gemini no respondió")
+
     return response.text
 
 
@@ -301,7 +305,7 @@ Mensaje:
 def procesar_mensaje(mensaje, chat_id=None):
 
     try:
-        print("📥 MENSAJE:", mensaje)
+        print("\n📥 MENSAJE:", mensaje)
 
         # ======================
         # CUENTA PENDIENTE
@@ -335,7 +339,7 @@ def procesar_mensaje(mensaje, chat_id=None):
         for d in movimientos:
 
             d = reparar(mensaje, d)
-            d["tipo"] = forzar_tipo(mensaje, d.get("tipo", ""))
+            d["tipo"] = forzar_tipo(mensaje)
 
             cuenta = d.get("cuenta", "No especificada").lower().strip()
             d["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
@@ -357,5 +361,5 @@ def procesar_mensaje(mensaje, chat_id=None):
         ])
 
     except Exception as e:
-        print("❌ ERROR COMPLETO:", str(e))
-        return "⚠️ Error procesando mensaje. Intenta reformularlo (ej: 'gasté 20k en café')"
+        print("❌ ERROR COMPLETO:", repr(e))
+        return f"⚠️ Error real: {str(e)}"
