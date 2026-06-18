@@ -54,63 +54,13 @@ def home():
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
-    print("\n🔥🔥 WEBHOOK RECIBIDO")
+    print("\n🔥🔥 WEBHOOK HIT REAL")
 
-    try:
-        raw = request.data
-        print("📦 RAW:", raw)
+    raw = request.data
+    print("📦 RAW:", raw)
 
-        data = request.get_json(force=True, silent=True)
-
-        print("📨 JSON:", json.dumps(data, indent=2, ensure_ascii=False))
-
-        if not data:
-            print("⚠️ No data recibida")
-            return "OK", 200
-
-        print("🔑 KEYS:", list(data.keys()))
-
-        # ==========================
-        # EXTRAER MENSAJE
-        # ==========================
-
-        message = (
-            data.get("message")
-            or data.get("edited_message")
-            or data.get("channel_post")
-            or (data.get("callback_query") or {}).get("message")
-        )
-
-        if not message:
-            print("⚠️ Update sin message")
-            return "OK", 200
-
-        text = message.get("text")
-        chat_id = message.get("chat", {}).get("id")
-
-        print("📩 TEXT:", text)
-        print("👤 CHAT ID:", chat_id)
-
-        if not chat_id:
-            print("⚠️ Sin chat_id")
-            return "OK", 200
-
-        if not text:
-            text = ""
-            print("⚠️ Mensaje sin texto (posible sticker/audio/etc)")
-
-        # ==========================
-        # LÓGICA FINANZAS
-        # ==========================
-
-        respuesta = procesar_mensaje(text)
-
-        print("🤖 RESPUESTA:", respuesta)
-
-        enviar_mensaje(chat_id, respuesta)
-
-    except Exception as e:
-        print("❌ ERROR GENERAL:", str(e))
+    data = request.get_json(force=True, silent=True)
+    print("📨 JSON:", data)
 
     return "OK", 200
 
