@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 import os
 
@@ -18,14 +19,14 @@ genai.configure(api_key=API_KEY)
 
 
 # ==========================
-# MEMORIA TEMPORAL (CUENTAS PENDIENTES)
+# MEMORIA SIMPLE (CUENTAS PENDIENTES)
 # ==========================
 
 pending_movements = {}
 
 
 # ==========================
-# CONTEXTO (EXACTAMENTE EL TUYO)
+# CONTEXTO (TU MODELO MENTAL COMPLETO)
 # ==========================
 
 contexto_usuario = """
@@ -43,7 +44,7 @@ Tengo dos tipos de movimientos:
 CATEGORÍAS DE GASTOS:
 
 Antojos:
-Compras impulsivas o pequeños gustos de comida, tipo postres, gustos, antojos, etc.
+Compras impulsivas, cafés, pasteles o pequeños gustos de comida, tipo postres, gustos, antojos, etc.
 
 Comida afuera:
 Restaurantes, cenas, desayunos y almuerzos y comidas fuera de casa.
@@ -112,26 +113,25 @@ Moshiplanes:
 Conciertos, planes y actividades de ocio con mi esposa.
 
 
-
 CATEGORÍAS DE INGRESOS:
 
 P&S:
-Son ingresos relacionados con los préstamos que hago a través de mis papás.
+Préstamos que hago a través de mis papás.
 
 Divan:
-Pago por el evento "El divan" (micrófono abierto, talleres de storytelling, etc.)
+Ingresos por evento "El divan".
 
 Peña:
-Presentaciones y conciertos en peñas con la banda Pedro Bombo.
+Conciertos en peñas o eventos con Pedro Bombo.
 
 Clases:
-Ingresos por clases.
+Ingresos por clases independientes o en la universidad del bosque.
 
 Juan Pablo Luna:
-Ingresos del proyecto artístico (conciertos, merch, etc.)
+Ingresos artísticos por el proyecto personal, ya sea por MERCH o conciertos con Juan Pablo Luna.
 
 Audio:
-Grabación, mezcla y producción para terceros.
+Producción musical o de audio para terceros como mezclas, edición, sesiones de producción.
 
 
 CUENTAS POSIBLES:
@@ -144,15 +144,14 @@ Efectivo
 Bancolombia
 
 
-REGLAS IMPORTANTES:
+REGLAS:
 
-- Devuelve SOLO una lista JSON válida
+- Devuelve SOLO una lista JSON
 - Puede haber uno o varios movimientos
-- Si no se especifica cuenta: "No especificada"
-- Convierte:
-  - 18 lucas → 18000
-  - 50k → 50000
-  - 23 mil → 23000
+- Si no hay cuenta: "No especificada"
+- 18 lucas → 18000
+- 50k → 50000
+- 23 mil → 23000
 
 """
 
@@ -167,7 +166,6 @@ scopes = [
 ]
 
 creds_info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
-
 creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
 
 client = gspread.authorize(creds)
@@ -179,7 +177,7 @@ ingresos_sheet = doc.worksheet("Ingresos")
 
 
 # ==========================
-# CUENTAS VALIDAS
+# CUENTAS
 # ==========================
 
 cuentas_validas = {
@@ -193,15 +191,30 @@ cuentas_validas = {
 
 
 # ==========================
-# LIMPIEZA JSON
+# LIMPIEZA ROBUSTA DE JSON
 # ==========================
 
-def limpiar_json(texto: str) -> str:
-    return (
-        texto.replace("```json", "")
-        .replace("```", "")
-        .strip()
-    )
+def extraer_json(texto: str):
+    """
+    Extrae el primer bloque JSON válido aunque venga sucio.
+    """
+    try:
+        texto = texto.strip()
+
+        # quitar markdown
+        texto = texto.replace("```json", "").replace("```", "")
+
+        # buscar array JSON
+        match = re.search(r"\[\s*{.*}\s*\]", texto, re.DOTALL)
+
+        if match:
+            return json.loads(match.group())
+
+        # fallback directo
+        return json.loads(texto)
+
+    except Exception:
+        raise ValueError(f"No se pudo parsear JSON: {texto}")
 
 
 # ==========================
@@ -213,10 +226,7 @@ def guardar_movimiento(d):
 
     cuenta = d.get("cuenta", "No especificada").lower().strip()
 
-    if cuenta in cuentas_validas:
-        cuenta = cuentas_validas[cuenta]
-    else:
-        cuenta = "No especificada"
+    cuenta = cuentas_validas.get(cuenta, "No especificada")
 
     fila = [
         fecha,
@@ -242,35 +252,29 @@ def procesar_mensaje(mensaje, chat_id=None):
         print("📥 MENSAJE:", mensaje)
 
         # ==========================
-        # CASO: RESPONDIENDO CUENTA PENDIENTE
+        # RESPUESTA A CUENTA PENDIENTE
         # ==========================
 
         if chat_id and chat_id in pending_movements:
             movimiento = pending_movements.pop(chat_id)
 
             cuenta = mensaje.lower().strip()
-
-            if cuenta in cuentas_validas:
-                movimiento["cuenta"] = cuentas_validas[cuenta]
-            else:
-                movimiento["cuenta"] = "No especificada"
+            movimiento["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
 
             guardar_movimiento(movimiento)
 
             return "✅ Cuenta registrada y movimiento guardado"
 
         # ==========================
-        # CASO NORMAL
+        # GEMINI
         # ==========================
 
         prompt = f"""
 {contexto_usuario}
 
-Extrae la información financiera del mensaje.
+Extrae información financiera del mensaje.
 
-Puede haber uno o varios movimientos.
-
-Devuelve SOLO JSON válido (lista).
+Devuelve SOLO una lista JSON.
 
 Mensaje:
 {mensaje}
@@ -282,12 +286,10 @@ Mensaje:
         raw = response.text.strip()
         print("🤖 RAW GEMINI:", raw)
 
-        clean = limpiar_json(raw)
-
-        movimientos = json.loads(clean)
+        movimientos = extraer_json(raw)
 
         if not isinstance(movimientos, list):
-            return "❌ Gemini no devolvió una lista válida"
+            return "❌ Formato inválido de Gemini"
 
         resultados = []
 
@@ -296,7 +298,7 @@ Mensaje:
             cuenta = d.get("cuenta", "No especificada").lower().strip()
 
             # ==========================
-            # SI NO HAY CUENTA → PREGUNTAR
+            # CUENTA FALTANTE → PREGUNTA
             # ==========================
 
             if cuenta == "no especificada":
@@ -306,19 +308,13 @@ Mensaje:
                 else:
                     d["cuenta"] = "No especificada"
             else:
-                if cuenta in cuentas_validas:
-                    d["cuenta"] = cuentas_validas[cuenta]
-                else:
-                    d["cuenta"] = "No especificada"
+                d["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
 
             guardar_movimiento(d)
             resultados.append(d)
 
         return f"✅ Guardado {len(resultados)} movimiento(s)"
 
-    except json.JSONDecodeError:
-        return "❌ Error: JSON inválido desde Gemini"
-
     except Exception as e:
-        print("❌ ERROR GENERAL:", str(e))
+        print("❌ ERROR COMPLETO:", str(e))
         return "❌ Error procesando mensaje"
