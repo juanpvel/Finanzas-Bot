@@ -23,7 +23,7 @@ genai.configure(api_key=API_KEY)
 
 
 # ==========================
-# GOOGLE SHEETS (SIN ARCHIVO LOCAL)
+# GOOGLE SHEETS
 # ==========================
 
 scopes = [
@@ -47,18 +47,30 @@ ingresos_sheet = documento.worksheet("Ingresos")
 
 
 # ==========================
-# FUNCIÓN PRINCIPAL (WHATSAPP)
+# UTIL: LIMPIAR RESPUESTA GEMINI
+# ==========================
+
+def limpiar_json(texto: str) -> str:
+    return (
+        texto.replace("```json", "")
+        .replace("```", "")
+        .strip()
+    )
+
+
+# ==========================
+# FUNCIÓN PRINCIPAL
 # ==========================
 
 def procesar_mensaje(mensaje):
 
-    prompt = f"""
+    try:
+        print("📥 MENSAJE:", mensaje)
+
+        prompt = f"""
 Extrae información financiera del mensaje.
 
-Devuelve SOLO una lista JSON.
-
-Mensaje:
-{mensaje}
+Devuelve SOLO JSON válido (sin texto adicional).
 
 Formato:
 [
@@ -70,35 +82,56 @@ Formato:
     "cuenta": "Nequi / Nu / Davivienda / Bancolombia / Efectivo / Splitwise / No especificada"
   }}
 ]
+
+Mensaje:
+{mensaje}
 """
 
-    response = genai.GenerativeModel(
-        "gemini-2.5-flash"
-    ).generate_content(prompt)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(prompt)
 
-    texto = response.text.replace("```json", "").replace("```", "").strip()
+        raw_text = response.text.strip()
 
-    movimientos = json.loads(texto)
+        print("🤖 RAW GEMINI:", raw_text)
 
-    resultados = []
+        clean_text = limpiar_json(raw_text)
 
-    for datos in movimientos:
+        movimientos = json.loads(clean_text)
 
-        fecha = datetime.now().strftime("%Y-%m-%d")
+        if not isinstance(movimientos, list):
+            return "❌ Gemini no devolvió una lista válida"
 
-        fila = [
-            fecha,
-            datos["categoria"],
-            datos["descripcion"],
-            datos["monto"],
-            datos["cuenta"]
-        ]
+        resultados = []
 
-        if datos["tipo"].lower() == "gasto":
-            gastos_sheet.append_row(fila)
-        else:
-            ingresos_sheet.append_row(fila)
+        for datos in movimientos:
 
-        resultados.append(datos)
+            fecha = datetime.now().strftime("%Y-%m-%d")
 
-    return f"✅ Guardado {len(resultados)} movimiento(s)"
+            fila = [
+                fecha,
+                datos.get("categoria", ""),
+                datos.get("descripcion", ""),
+                datos.get("monto", 0),
+                datos.get("cuenta", "")
+            ]
+
+            tipo = datos.get("tipo", "").lower()
+
+            if tipo == "gasto":
+                gastos_sheet.append_row(fila)
+            elif tipo == "ingreso":
+                ingresos_sheet.append_row(fila)
+            else:
+                print("⚠️ Tipo desconocido:", tipo)
+
+            resultados.append(datos)
+
+        return f"✅ Guardado {len(resultados)} movimiento(s)"
+
+    except json.JSONDecodeError as e:
+        print("❌ JSON ERROR:", str(e))
+        return "❌ Error: Gemini devolvió JSON inválido"
+
+    except Exception as e:
+        print("❌ ERROR GENERAL:", str(e))
+        return "❌ Error procesando mensaje"

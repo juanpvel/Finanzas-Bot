@@ -7,9 +7,17 @@ from Finanzas_bot import procesar_mensaje
 
 app = Flask(__name__)
 
+# ==========================
+# CONFIG
+# ==========================
+
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
+
+# ==========================
+# ENVIAR MENSAJE TELEGRAM
+# ==========================
 
 def enviar_mensaje(chat_id, texto):
     if not TELEGRAM_TOKEN:
@@ -24,15 +32,24 @@ def enviar_mensaje(chat_id, texto):
                 "text": texto
             }
         )
-        print("📤 RESPUESTA TELEGRAM:", r.status_code, r.text)
+        print("📤 TELEGRAM RESPONSE:", r.status_code, r.text)
+
     except Exception as e:
         print("❌ ERROR enviando mensaje:", e)
 
+
+# ==========================
+# HEALTH CHECK
+# ==========================
 
 @app.route("/", methods=["GET"])
 def home():
     return "Bot activo 🚀", 200
 
+
+# ==========================
+# WEBHOOK TELEGRAM
+# ==========================
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -40,9 +57,10 @@ def webhook():
     print("\n🔥🔥 WEBHOOK RECIBIDO")
 
     try:
-        data = request.get_json(force=True, silent=True)
+        raw = request.data
+        print("📦 RAW:", raw)
 
-        print("📦 RAW:", request.data)
+        data = request.get_json(force=True, silent=True)
 
         print("📨 JSON:", json.dumps(data, indent=2, ensure_ascii=False))
 
@@ -52,33 +70,23 @@ def webhook():
 
         print("🔑 KEYS:", list(data.keys()))
 
-        # 🔥 EXTRACCIÓN ROBUSTA DE MENSAJE
-        message = None
-        chat_id = None
-        text = None
+        # ==========================
+        # EXTRAER MENSAJE
+        # ==========================
 
-        # CASO 1: mensaje normal
-        if "message" in data:
-            message = data["message"]
-
-        # CASO 2: editado
-        elif "edited_message" in data:
-            message = data["edited_message"]
-
-        # CASO 3: canal
-        elif "channel_post" in data:
-            message = data["channel_post"]
-
-        # CASO 4: callback (botones)
-        elif "callback_query" in data:
-            message = data["callback_query"].get("message")
+        message = (
+            data.get("message")
+            or data.get("edited_message")
+            or data.get("channel_post")
+            or (data.get("callback_query") or {}).get("message")
+        )
 
         if not message:
-            print("⚠️ No message encontrado en update")
+            print("⚠️ Update sin message")
             return "OK", 200
 
-        chat_id = message.get("chat", {}).get("id")
         text = message.get("text")
+        chat_id = message.get("chat", {}).get("id")
 
         print("📩 TEXT:", text)
         print("👤 CHAT ID:", chat_id)
@@ -88,10 +96,13 @@ def webhook():
             return "OK", 200
 
         if not text:
-            print("⚠️ Mensaje sin texto (posible sticker, audio, etc.)")
             text = ""
+            print("⚠️ Mensaje sin texto (posible sticker/audio/etc)")
 
-        # 🔥 TU LÓGICA
+        # ==========================
+        # LÓGICA FINANZAS
+        # ==========================
+
         respuesta = procesar_mensaje(text)
 
         print("🤖 RESPUESTA:", respuesta)
@@ -103,6 +114,10 @@ def webhook():
 
     return "OK", 200
 
+
+# ==========================
+# RUN LOCAL (IGNORADO EN RENDER)
+# ==========================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5050))
