@@ -1,5 +1,5 @@
-flask
-requests
+Flask
 gspread
-oauth2client
-google-generativeai
+google-auth
+google-genai
+requests
