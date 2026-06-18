@@ -5,7 +5,7 @@ import re
 
 import gspread
 from google.oauth2.service_account import Credentials
-import google.genai as genai
+from google import genai
 
 
 # ==========================
@@ -27,7 +27,7 @@ pending_movements = {}
 
 
 # ==========================
-# CONTEXTO (INTACTO)
+# CONTEXTO
 # ==========================
 
 contexto_usuario = """
@@ -145,20 +145,49 @@ Efectivo
 Bancolombia
 
 
-REGLAS:
+REGLAS IMPORTANTES:
 
-- Devuelve SOLO una lista JSON
+- Devuelve SOLO una lista JSON válida
 - Puede haber uno o varios movimientos
-- Si no hay cuenta: "No especificada"
-- 18 lucas → 18000
-- 50k → 50000
-- 23 mil → 23000
+
+- Cada movimiento debe tener:
+
+tipo
+categoria
+descripcion
+monto
+cuenta
+
+- Si NO se menciona ingreso explícitamente:
+asume SIEMPRE "gasto"
+
+- Considera ingreso frases como:
+
+"ingreso"
+"me llegó"
+"me llegaron"
+"me entró"
+"me entro"
+"recibí"
+"me pagaron"
+"me consignaron"
+"me depositaron"
+
+- Si no se especifica cuenta:
+
+"cuenta": "No especificada"
+
+- Convierte:
+
+18 lucas → 18000
+50k → 50000
+23 mil → 23000
 
 """
 
 
 # ==========================
-# SHEETS
+# GOOGLE SHEETS
 # ==========================
 
 scopes = [
@@ -168,9 +197,13 @@ scopes = [
 
 creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
 
-creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
+creds = Credentials.from_service_account_info(
+    creds_info,
+    scopes=scopes
+)
 
 gc = gspread.authorize(creds)
+
 doc = gc.open_by_key(SHEET_ID)
 
 gastos_sheet = doc.worksheet("Gastos")
@@ -192,20 +225,29 @@ cuentas_validas = {
 
 
 # ==========================
-# JSON PARSER ROBUSTO
+# JSON ROBUSTO
 # ==========================
 
-def extraer_json(texto: str):
-    texto = texto.replace("```json", "").replace("```", "").strip()
+def extraer_json(texto):
+
+    texto = texto.strip()
+
+    texto = (
+        texto
+        .replace("```json", "")
+        .replace("```", "")
+        .strip()
+    )
 
     start = texto.find("[")
     end = texto.rfind("]")
 
     if start == -1 or end == -1:
-        print("❌ RESPUESTA GEMINI SIN JSON:", texto)
-        raise ValueError("No JSON array found")
+        raise ValueError(f"No encontré JSON:\n{texto}")
 
-    return json.loads(texto[start:end + 1])
+    json_text = texto[start:end+1]
+
+    return json.loads(json_text)
 
 
 # ==========================
@@ -213,11 +255,14 @@ def extraer_json(texto: str):
 # ==========================
 
 def reparar(mensaje, d):
+
     if not d.get("descripcion"):
         d["descripcion"] = mensaje
 
     if not d.get("monto"):
+
         nums = re.findall(r"\d+", mensaje)
+
         if nums:
             d["monto"] = int(nums[0])
 
@@ -229,42 +274,89 @@ def reparar(mensaje, d):
 # ==========================
 
 def forzar_tipo(mensaje):
+
     texto = mensaje.lower()
 
     ingresos = [
-        "ingreso", "me llegó", "me llego", "recibí", "recibi",
-        "me entró", "me entro", "me pagaron", "me consignaron", "me depositaron"
+
+        "ingreso",
+
+        "me llegó",
+        "me llego",
+
+        "me llegaron",
+
+        "me entró",
+        "me entro",
+
+        "recibí",
+        "recibi",
+
+        "me pagaron",
+
+        "me consignaron",
+
+        "me depositaron"
+
     ]
 
-    return "ingreso" if any(k in texto for k in ingresos) else "gasto"
+    if any(x in texto for x in ingresos):
+        return "ingreso"
+
+    return "gasto"
 
 
 # ==========================
-# GUARDAR EN SHEETS
+# GUARDAR
 # ==========================
 
 def guardar(d):
+
     fecha = datetime.now().strftime("%Y-%m-%d")
 
-    cuenta = d.get("cuenta", "No especificada").lower().strip()
-    cuenta = cuentas_validas.get(cuenta, "No especificada")
+    cuenta = d.get(
+        "cuenta",
+        "No especificada"
+    ).lower().strip()
+
+    cuenta = cuentas_validas.get(
+        cuenta,
+        "No especificada"
+    )
 
     fila = [
+
         fecha,
+
         d.get("categoria", ""),
+
         d.get("descripcion", ""),
+
         d.get("monto", 0),
+
         cuenta
+
     ]
 
     print("📤 GUARDANDO:", fila)
 
-    if d.get("tipo") == "gasto":
+    if d["tipo"] == "gasto":
+
         gastos_sheet.append_row(fila)
+
     else:
+
         ingresos_sheet.append_row(fila)
 
-    return {**d, "cuenta": cuenta}
+    return {
+
+        **d,
+
+        "fecha": fecha,
+
+        "cuenta": cuenta
+
+    }
 
 
 # ==========================
@@ -272,28 +364,36 @@ def guardar(d):
 # ==========================
 
 def llamar_gemini(mensaje):
+
     prompt = f"""
+
 {contexto_usuario}
 
-Extrae movimientos financieros.
+Extrae la información financiera.
 
-Reglas:
-- Si NO dice ingreso explícito → asumir gasto
-- Puede haber múltiples movimientos
-
-Devuelve SOLO JSON (lista).
+Devuelve SOLO una lista JSON válida.
 
 Mensaje:
+
 {mensaje}
+
 """
 
     response = client_genai.models.generate_content(
-        model="gemini-2.0-flash",
+
+        model="gemini-2.5-flash",
+
         contents=prompt
+
     )
 
-    if not response or not response.text:
+    if not response:
+
         raise ValueError("Gemini no respondió")
+
+    if not response.text:
+
+        raise ValueError("Gemini respondió vacío")
 
     return response.text
 
@@ -305,32 +405,48 @@ Mensaje:
 def procesar_mensaje(mensaje, chat_id=None):
 
     try:
+
         print("\n📥 MENSAJE:", mensaje)
 
-        # ======================
-        # CUENTA PENDIENTE
-        # ======================
+        # =====================
+        # RESPUESTA CUENTA
+        # =====================
 
         if chat_id and chat_id in pending_movements:
+
             mov = pending_movements.pop(chat_id)
 
-            mov["cuenta"] = cuentas_validas.get(mensaje.lower().strip(), "No especificada")
+            cuenta = mensaje.lower().strip()
 
-            mov = reparar(mensaje, mov)
+            mov["cuenta"] = cuentas_validas.get(
+
+                cuenta,
+
+                "No especificada"
+
+            )
+
             saved = guardar(mov)
 
-            return f"""✅ Guardado
+            return f"""
+
+✅ Cuenta registrada y movimiento guardado
 
 🧾 {saved['descripcion']}
 💰 {saved['monto']}
-🏦 {saved['cuenta']}"""
+🏦 {saved['cuenta']}
 
-        # ======================
+""".strip()
+
+        # =====================
         # GEMINI
-        # ======================
+        # =====================
 
         raw = llamar_gemini(mensaje)
-        print("🤖 RAW GEMINI:", raw)
+
+        print("🤖 RAW GEMINI:")
+
+        print(raw)
 
         movimientos = extraer_json(raw)
 
@@ -339,27 +455,75 @@ def procesar_mensaje(mensaje, chat_id=None):
         for d in movimientos:
 
             d = reparar(mensaje, d)
+
             d["tipo"] = forzar_tipo(mensaje)
 
-            cuenta = d.get("cuenta", "No especificada").lower().strip()
-            d["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
+            cuenta = d.get(
 
-            if d["cuenta"] == "No especificada" and chat_id:
-                pending_movements[chat_id] = d
-                return "🤔 ¿Qué cuenta fue? (Nequi, Nu, Davivienda, Bancolombia, Efectivo, Splitwise)"
+                "cuenta",
+
+                "No especificada"
+
+            ).lower().strip()
+
+            cuenta = cuentas_validas.get(
+
+                cuenta,
+
+                "No especificada"
+
+            )
+
+            d["cuenta"] = cuenta
+
+            if cuenta == "No especificada":
+
+                if chat_id:
+
+                    pending_movements[chat_id] = d
+
+                    return (
+
+                        "🤔 ¿Qué cuenta fue?\n\n"
+
+                        "Nequi\n"
+
+                        "Nu\n"
+
+                        "Davivienda\n"
+
+                        "Bancolombia\n"
+
+                        "Efectivo\n"
+
+                        "Splitwise"
+
+                    )
 
             saved = guardar(d)
+
             resultados.append(saved)
 
         return "\n\n".join([
+
             f"""🧾 Movimiento:
+
 📂 {r['categoria']}
+
 📝 {r['descripcion']}
+
 💰 {r['monto']}
+
 🏦 {r['cuenta']}"""
+
             for r in resultados
+
         ])
 
     except Exception as e:
-        print("❌ ERROR COMPLETO:", repr(e))
+
+        print("❌ ERROR COMPLETO:")
+
+        print(repr(e))
+
         return f"⚠️ Error real: {str(e)}"
