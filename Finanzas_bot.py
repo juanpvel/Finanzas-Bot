@@ -14,12 +14,147 @@ import google.generativeai as genai
 API_KEY = os.environ.get("GEMINI_API_KEY")
 NOMBRE_DOCUMENTO = "Cuentas Personales - Pruebas Python - Junio 2026"
 
-
-# ==========================
-# GEMINI
-# ==========================
-
 genai.configure(api_key=API_KEY)
+
+
+# ==========================
+# MEMORIA TEMPORAL (CUENTAS PENDIENTES)
+# ==========================
+
+pending_movements = {}
+
+
+# ==========================
+# CONTEXTO (EXACTAMENTE EL TUYO)
+# ==========================
+
+contexto_usuario = """
+
+Soy Juan Pablo Luna.
+
+Soy músico, compositor y productor.
+
+Tengo dos tipos de movimientos:
+
+- Gasto
+- Ingreso
+
+
+CATEGORÍAS DE GASTOS:
+
+Antojos:
+Compras impulsivas o pequeños gustos de comida, tipo postres, gustos, antojos, etc.
+
+Comida afuera:
+Restaurantes, cenas, desayunos y almuerzos y comidas fuera de casa.
+
+Deporte:
+Actividad física como el pago de la membresía de Trepa, o compra de magnesio.
+
+Enfermedades:
+Medicamentos y gastos médicos.
+
+Inversión para el estudio:
+Si compro cables, micrófonos, parlantes, plugins de audio, cuerdas de guitarra o tiple, o similares.
+
+Mambe:
+Gastos relacionados con compra de mambe y ambil, también incluye el transporte del domicilio.
+
+Mercado:
+Supermercado y compras para cocinar o con productos de aseo para la casa.
+
+Moto:
+Gasolina y gastos de la moto como revisión en taller, cambio de aceite, impuestos, etc.
+
+Panaderia:
+Pan y compras de panadería.
+
+Para mi:
+Compras personales como ropa u objetos para mi, no comida.
+
+Regalos:
+Regalos para otras personas.
+
+Servicios:
+Internet, agua, luz, celular, etc.
+
+Transporte:
+Bus, taxi, Uber y transporte.
+
+Uma:
+Uma es nuestra perrita, son gastos relacionados con su cuidado, comida, veterinario, etc.
+
+Vivienda:
+Arriendo, administración del edificio.
+
+Planilla:
+Seguridad social.
+
+Para la casa:
+Objetos y mejoras para la casa.
+
+Plataformas video:
+Netflix, Disney Plus YouTube Premium y similares.
+
+Paseos:
+Viajes y salidas fuera de la ciudad.
+
+Intereses:
+Intereses bancarios.
+
+Inversión disco:
+Gastos relacionados con la producción y promoción del disco de mi proyecto personal.
+
+Aseo:
+Cuando viene una persona a la casa a hacer el aseo del apartamento.
+
+Moshiplanes:
+Conciertos, planes y actividades de ocio con mi esposa.
+
+
+
+CATEGORÍAS DE INGRESOS:
+
+P&S:
+Son ingresos relacionados con los préstamos que hago a través de mis papás.
+
+Divan:
+Pago por el evento "El divan" (micrófono abierto, talleres de storytelling, etc.)
+
+Peña:
+Presentaciones y conciertos en peñas con la banda Pedro Bombo.
+
+Clases:
+Ingresos por clases.
+
+Juan Pablo Luna:
+Ingresos del proyecto artístico (conciertos, merch, etc.)
+
+Audio:
+Grabación, mezcla y producción para terceros.
+
+
+CUENTAS POSIBLES:
+
+Splitwise
+Nequi
+Davivienda
+Nu
+Efectivo
+Bancolombia
+
+
+REGLAS IMPORTANTES:
+
+- Devuelve SOLO una lista JSON válida
+- Puede haber uno o varios movimientos
+- Si no se especifica cuenta: "No especificada"
+- Convierte:
+  - 18 lucas → 18000
+  - 50k → 50000
+  - 23 mil → 23000
+
+"""
 
 
 # ==========================
@@ -33,21 +168,32 @@ scopes = [
 
 creds_info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
 
-creds = Credentials.from_service_account_info(
-    creds_info,
-    scopes=scopes
-)
+creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
 
 client = gspread.authorize(creds)
 
-documento = client.open(NOMBRE_DOCUMENTO)
+doc = client.open(NOMBRE_DOCUMENTO)
 
-gastos_sheet = documento.worksheet("Gastos")
-ingresos_sheet = documento.worksheet("Ingresos")
+gastos_sheet = doc.worksheet("Gastos")
+ingresos_sheet = doc.worksheet("Ingresos")
 
 
 # ==========================
-# UTIL: LIMPIAR RESPUESTA GEMINI
+# CUENTAS VALIDAS
+# ==========================
+
+cuentas_validas = {
+    "nequi": "Nequi",
+    "nu": "Nu",
+    "davivienda": "Davivienda",
+    "bancolombia": "Bancolombia",
+    "efectivo": "Efectivo",
+    "splitwise": "Splitwise"
+}
+
+
+# ==========================
+# LIMPIEZA JSON
 # ==========================
 
 def limpiar_json(texto: str) -> str:
@@ -59,29 +205,72 @@ def limpiar_json(texto: str) -> str:
 
 
 # ==========================
+# GUARDAR EN SHEETS
+# ==========================
+
+def guardar_movimiento(d):
+    fecha = datetime.now().strftime("%Y-%m-%d")
+
+    cuenta = d.get("cuenta", "No especificada").lower().strip()
+
+    if cuenta in cuentas_validas:
+        cuenta = cuentas_validas[cuenta]
+    else:
+        cuenta = "No especificada"
+
+    fila = [
+        fecha,
+        d.get("categoria", ""),
+        d.get("descripcion", ""),
+        d.get("monto", 0),
+        cuenta
+    ]
+
+    if d.get("tipo", "").lower() == "gasto":
+        gastos_sheet.append_row(fila)
+    else:
+        ingresos_sheet.append_row(fila)
+
+
+# ==========================
 # FUNCIÓN PRINCIPAL
 # ==========================
 
-def procesar_mensaje(mensaje):
+def procesar_mensaje(mensaje, chat_id=None):
 
     try:
         print("📥 MENSAJE:", mensaje)
 
+        # ==========================
+        # CASO: RESPONDIENDO CUENTA PENDIENTE
+        # ==========================
+
+        if chat_id and chat_id in pending_movements:
+            movimiento = pending_movements.pop(chat_id)
+
+            cuenta = mensaje.lower().strip()
+
+            if cuenta in cuentas_validas:
+                movimiento["cuenta"] = cuentas_validas[cuenta]
+            else:
+                movimiento["cuenta"] = "No especificada"
+
+            guardar_movimiento(movimiento)
+
+            return "✅ Cuenta registrada y movimiento guardado"
+
+        # ==========================
+        # CASO NORMAL
+        # ==========================
+
         prompt = f"""
-Extrae información financiera del mensaje.
+{contexto_usuario}
 
-Devuelve SOLO JSON válido (sin texto adicional).
+Extrae la información financiera del mensaje.
 
-Formato:
-[
-  {{
-    "tipo": "Gasto o Ingreso",
-    "categoria": "",
-    "descripcion": "",
-    "monto": 0,
-    "cuenta": "Nequi / Nu / Davivienda / Bancolombia / Efectivo / Splitwise / No especificada"
-  }}
-]
+Puede haber uno o varios movimientos.
+
+Devuelve SOLO JSON válido (lista).
 
 Mensaje:
 {mensaje}
@@ -90,47 +279,45 @@ Mensaje:
         model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt)
 
-        raw_text = response.text.strip()
+        raw = response.text.strip()
+        print("🤖 RAW GEMINI:", raw)
 
-        print("🤖 RAW GEMINI:", raw_text)
+        clean = limpiar_json(raw)
 
-        clean_text = limpiar_json(raw_text)
-
-        movimientos = json.loads(clean_text)
+        movimientos = json.loads(clean)
 
         if not isinstance(movimientos, list):
             return "❌ Gemini no devolvió una lista válida"
 
         resultados = []
 
-        for datos in movimientos:
+        for d in movimientos:
 
-            fecha = datetime.now().strftime("%Y-%m-%d")
+            cuenta = d.get("cuenta", "No especificada").lower().strip()
 
-            fila = [
-                fecha,
-                datos.get("categoria", ""),
-                datos.get("descripcion", ""),
-                datos.get("monto", 0),
-                datos.get("cuenta", "")
-            ]
+            # ==========================
+            # SI NO HAY CUENTA → PREGUNTAR
+            # ==========================
 
-            tipo = datos.get("tipo", "").lower()
-
-            if tipo == "gasto":
-                gastos_sheet.append_row(fila)
-            elif tipo == "ingreso":
-                ingresos_sheet.append_row(fila)
+            if cuenta == "no especificada":
+                if chat_id:
+                    pending_movements[chat_id] = d
+                    return "🤔 ¿Qué cuenta fue? (Nequi, Nu, Davivienda, Bancolombia, Efectivo, Splitwise)"
+                else:
+                    d["cuenta"] = "No especificada"
             else:
-                print("⚠️ Tipo desconocido:", tipo)
+                if cuenta in cuentas_validas:
+                    d["cuenta"] = cuentas_validas[cuenta]
+                else:
+                    d["cuenta"] = "No especificada"
 
-            resultados.append(datos)
+            guardar_movimiento(d)
+            resultados.append(d)
 
         return f"✅ Guardado {len(resultados)} movimiento(s)"
 
-    except json.JSONDecodeError as e:
-        print("❌ JSON ERROR:", str(e))
-        return "❌ Error: Gemini devolvió JSON inválido"
+    except json.JSONDecodeError:
+        return "❌ Error: JSON inválido desde Gemini"
 
     except Exception as e:
         print("❌ ERROR GENERAL:", str(e))

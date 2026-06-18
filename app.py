@@ -54,19 +54,64 @@ def home():
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
-    print("\n🔥🔥 WEBHOOK HIT REAL")
+    print("\n🔥 WEBHOOK RECIBIDO")
 
-    raw = request.data
-    print("📦 RAW:", raw)
+    try:
+        data = request.get_json(force=True, silent=True)
 
-    data = request.get_json(force=True, silent=True)
-    print("📨 JSON:", data)
+        if not data:
+            print("⚠️ No data recibida")
+            return "OK", 200
+
+        print("📨 UPDATE:", json.dumps(data, indent=2, ensure_ascii=False))
+
+        # ==========================
+        # EXTRAER MENSAJE
+        # ==========================
+
+        message = (
+            data.get("message")
+            or data.get("edited_message")
+            or data.get("channel_post")
+            or (data.get("callback_query") or {}).get("message")
+        )
+
+        if not message:
+            print("⚠️ Update sin message")
+            return "OK", 200
+
+        text = message.get("text", "")
+        chat_id = message.get("chat", {}).get("id")
+
+        print("📩 TEXT:", text)
+        print("👤 CHAT ID:", chat_id)
+
+        if not chat_id:
+            print("⚠️ Sin chat_id")
+            return "OK", 200
+
+        # ==========================
+        # PROCESAR MENSAJE
+        # ==========================
+
+        respuesta = procesar_mensaje(text, chat_id)
+
+        print("🤖 RESPUESTA:", respuesta)
+
+        # ==========================
+        # RESPONDER
+        # ==========================
+
+        enviar_mensaje(chat_id, respuesta)
+
+    except Exception as e:
+        print("❌ ERROR GENERAL:", str(e))
 
     return "OK", 200
 
 
 # ==========================
-# RUN LOCAL (IGNORADO EN RENDER)
+# RUN LOCAL
 # ==========================
 
 if __name__ == "__main__":
