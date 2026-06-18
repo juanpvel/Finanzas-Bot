@@ -1,5 +1,4 @@
 import json
-import re
 from datetime import datetime
 import os
 
@@ -26,7 +25,7 @@ pending_movements = {}
 
 
 # ==========================
-# CONTEXTO (TU MODELO MENTAL COMPLETO)
+# CONTEXTO (TU MODELO MENTAL COMPLETO - INTacto)
 # ==========================
 
 contexto_usuario = """
@@ -191,30 +190,33 @@ cuentas_validas = {
 
 
 # ==========================
-# LIMPIEZA ROBUSTA DE JSON
+# EXTRAER JSON ROBUSTO (FIX DEFINITIVO)
 # ==========================
 
 def extraer_json(texto: str):
     """
-    Extrae el primer bloque JSON válido aunque venga sucio.
+    Extrae JSON incluso si Gemini lo devuelve con texto adicional.
     """
     try:
         texto = texto.strip()
 
-        # quitar markdown
+        # limpiar markdown
         texto = texto.replace("```json", "").replace("```", "")
 
-        # buscar array JSON
-        match = re.search(r"\[\s*{.*}\s*\]", texto, re.DOTALL)
+        # buscar inicio y fin del JSON real
+        start = texto.find("[")
+        end = texto.rfind("]")
 
-        if match:
-            return json.loads(match.group())
+        if start == -1 or end == -1:
+            raise ValueError(f"No JSON array found: {texto}")
 
-        # fallback directo
-        return json.loads(texto)
+        json_str = texto[start:end + 1]
 
-    except Exception:
-        raise ValueError(f"No se pudo parsear JSON: {texto}")
+        return json.loads(json_str)
+
+    except Exception as e:
+        print("❌ RAW FALLIDO:", texto)
+        raise ValueError(f"JSON parse error: {str(e)}")
 
 
 # ==========================
@@ -225,7 +227,6 @@ def guardar_movimiento(d):
     fecha = datetime.now().strftime("%Y-%m-%d")
 
     cuenta = d.get("cuenta", "No especificada").lower().strip()
-
     cuenta = cuentas_validas.get(cuenta, "No especificada")
 
     fila = [
@@ -252,7 +253,7 @@ def procesar_mensaje(mensaje, chat_id=None):
         print("📥 MENSAJE:", mensaje)
 
         # ==========================
-        # RESPUESTA A CUENTA PENDIENTE
+        # RESPUESTA CUENTA PENDIENTE
         # ==========================
 
         if chat_id and chat_id in pending_movements:
@@ -274,7 +275,7 @@ def procesar_mensaje(mensaje, chat_id=None):
 
 Extrae información financiera del mensaje.
 
-Devuelve SOLO una lista JSON.
+Devuelve SOLO una lista JSON válida.
 
 Mensaje:
 {mensaje}
