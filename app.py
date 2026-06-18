@@ -1,94 +1,40 @@
-from flask import Flask, request
-import os
-import requests
+@app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    if request.method == "GET":
+        print("🔥 VERIFICACIÓN WEBHOOK")
 
-from Finanzas_bot import procesar_mensaje
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
 
-app = Flask(__name__)
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            return challenge
 
-# 🔐 Token de verificación (lo defines tú y lo pones también en Meta)
-VERIFY_TOKEN = "mi_bot_whatsapp_123"
+        return "Error", 403
 
-# 📦 Variables de entorno (Render)
-WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
+    if request.method == "POST":
+        print("🔥 WEBHOOK POST RECIBIDO")
 
+        data = request.get_json()
 
-# -----------------------------
-# 🔐 VERIFICACIÓN WEBHOOK (META)
-# -----------------------------
-@app.route("/webhook", methods=["GET"])
-def verify_webhook():
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
+        try:
+            value = data["entry"][0]["changes"][0]["value"]
 
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        return challenge
-    return "Error", 403
+            if "messages" not in value:
+                return "OK", 200
 
+            message = value["messages"][0]["text"]["body"]
+            sender = value["messages"][0]["from"]
 
-# -----------------------------
-# 📩 RECIBIR MENSAJES WHATSAPP
-# -----------------------------
-@app.route("/webhook", methods=["POST"])
-def receive_message():
-    data = request.get_json()
+            print("📩 Mensaje:", message)
+            print("👤 Usuario:", sender)
 
-    try:
-        value = data["entry"][0]["changes"][0]["value"]
+            respuesta = procesar_mensaje(message)
 
-        # Si no hay mensaje, no hacer nada
-        if "messages" not in value:
+            enviar_mensaje(sender, respuesta)
+
             return "OK", 200
 
-        message = value["messages"][0]["text"]["body"]
-        sender = value["messages"][0]["from"]
-
-        print("📩 Mensaje:", message)
-        print("👤 Usuario:", sender)
-
-        # 🤖 Procesar con tu lógica (Gemini + Sheets)
-        respuesta = procesar_mensaje(message)
-
-        # 📤 Responder por WhatsApp
-        enviar_mensaje(sender, respuesta)
-
-        return "OK", 200
-
-    except Exception as e:
-        print("❌ Error:", e)
-        return "OK", 200
-
-
-# -----------------------------
-# 📤 ENVIAR MENSAJE WHATSAPP
-# -----------------------------
-def enviar_mensaje(numero, texto):
-    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
-
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": numero,
-        "type": "text",
-        "text": {
-            "body": texto
-        }
-    }
-
-    response = requests.post(url, headers=headers, json=payload)
-
-    print("📤 WhatsApp response:", response.status_code, response.text)
-
-
-# -----------------------------
-# 🚀 RUN SERVER
-# -----------------------------
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5050))
-    app.run(host="0.0.0.0", port=port)
+        except Exception as e:
+            print("❌ Error:", e)
+            return "OK", 200
