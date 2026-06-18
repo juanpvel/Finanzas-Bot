@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 import os
+import re
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -12,20 +13,20 @@ import google.generativeai as genai
 # ==========================
 
 API_KEY = os.environ.get("GEMINI_API_KEY")
-NOMBRE_DOCUMENTO = "Cuentas Personales - Pruebas Python - Junio 2026"
+NOMBRE_DOCUMENTO = "Cuentas Personales"  # 🔥 CAMBIO AQUÍ
 
 genai.configure(api_key=API_KEY)
 
 
 # ==========================
-# MEMORIA SIMPLE (CUENTAS PENDIENTES)
+# MEMORIA SIMPLE
 # ==========================
 
 pending_movements = {}
 
 
 # ==========================
-# CONTEXTO (TU MODELO MENTAL COMPLETO - INTacto)
+# CONTEXTO (INTACTO)
 # ==========================
 
 contexto_usuario = """
@@ -130,7 +131,7 @@ Juan Pablo Luna:
 Ingresos artísticos por el proyecto personal, ya sea por MERCH o conciertos con Juan Pablo Luna.
 
 Audio:
-Producción musical o de audio para terceros como mezclas, edición, sesiones de producción.
+Producción musical o de audio para terceros.
 
 
 CUENTAS POSIBLES:
@@ -169,7 +170,7 @@ creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
 
 client = gspread.authorize(creds)
 
-doc = client.open(NOMBRE_DOCUMENTO)
+doc = client.open(NOMBRE_DOCUMENTO)  # 🔥 SOLO CAMBIA EL NOMBRE DEL SHEET
 
 gastos_sheet = doc.worksheet("Gastos")
 ingresos_sheet = doc.worksheet("Ingresos")
@@ -190,37 +191,63 @@ cuentas_validas = {
 
 
 # ==========================
-# EXTRAER JSON ROBUSTO (FIX DEFINITIVO)
+# PARSER ROBUSTO JSON
 # ==========================
 
 def extraer_json(texto: str):
-    """
-    Extrae JSON incluso si Gemini lo devuelve con texto adicional.
-    """
     try:
         texto = texto.strip()
-
-        # limpiar markdown
         texto = texto.replace("```json", "").replace("```", "")
 
-        # buscar inicio y fin del JSON real
         start = texto.find("[")
         end = texto.rfind("]")
 
         if start == -1 or end == -1:
-            raise ValueError(f"No JSON array found: {texto}")
+            raise ValueError("No JSON found")
 
-        json_str = texto[start:end + 1]
-
-        return json.loads(json_str)
+        return json.loads(texto[start:end + 1])
 
     except Exception as e:
         print("❌ RAW FALLIDO:", texto)
-        raise ValueError(f"JSON parse error: {str(e)}")
+        raise ValueError(f"JSON error: {str(e)}")
 
 
 # ==========================
-# GUARDAR EN SHEETS
+# DETECCIÓN INGRESO/GASTO
+# ==========================
+
+def forzar_tipo(mensaje: str, tipo_gemini: str):
+    texto = mensaje.lower()
+
+    ingresos_keywords = [
+        "ingreso", "me llegó", "me llegaron", "me entró", "me entro",
+        "recibí", "me pagaron", "me consignaron", "me depositaron"
+    ]
+
+    if any(k in texto for k in ingresos_keywords):
+        return "ingreso"
+
+    return "gasto"
+
+
+# ==========================
+# FALLBACK MONTOS/DESCRIPCIÓN
+# ==========================
+
+def reparar_datos(mensaje, d):
+    if not d.get("descripcion"):
+        d["descripcion"] = mensaje
+
+    if not d.get("monto") or d.get("monto") == 0:
+        nums = re.findall(r"\d+", mensaje)
+        if nums:
+            d["monto"] = int(nums[0])
+
+    return d
+
+
+# ==========================
+# GUARDAR
 # ==========================
 
 def guardar_movimiento(d):
@@ -237,14 +264,20 @@ def guardar_movimiento(d):
         cuenta
     ]
 
-    if d.get("tipo", "").lower() == "gasto":
+    if d.get("tipo") == "gasto":
         gastos_sheet.append_row(fila)
     else:
         ingresos_sheet.append_row(fila)
 
+    return {
+        "fecha": fecha,
+        **d,
+        "cuenta": cuenta
+    }
+
 
 # ==========================
-# FUNCIÓN PRINCIPAL
+# MAIN
 # ==========================
 
 def procesar_mensaje(mensaje, chat_id=None):
@@ -252,30 +285,27 @@ def procesar_mensaje(mensaje, chat_id=None):
     try:
         print("📥 MENSAJE:", mensaje)
 
-        # ==========================
-        # RESPUESTA CUENTA PENDIENTE
-        # ==========================
-
         if chat_id and chat_id in pending_movements:
             movimiento = pending_movements.pop(chat_id)
 
             cuenta = mensaje.lower().strip()
             movimiento["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
 
-            guardar_movimiento(movimiento)
+            movimiento = reparar_datos(mensaje, movimiento)
+            recibido = guardar_movimiento(movimiento)
 
-            return "✅ Cuenta registrada y movimiento guardado"
+            return f"""✅ Cuenta registrada y movimiento guardado
 
-        # ==========================
-        # GEMINI
-        # ==========================
+🧾 {recibido['descripcion']}
+💰 {recibido['monto']}
+🏦 {recibido['cuenta']}"""
 
         prompt = f"""
 {contexto_usuario}
 
-Extrae información financiera del mensaje.
+Extrae información financiera.
 
-Devuelve SOLO una lista JSON válida.
+Devuelve SOLO lista JSON válida.
 
 Mensaje:
 {mensaje}
@@ -285,37 +315,36 @@ Mensaje:
         response = model.generate_content(prompt)
 
         raw = response.text.strip()
-        print("🤖 RAW GEMINI:", raw)
+        print("🤖 RAW:", raw)
 
         movimientos = extraer_json(raw)
-
-        if not isinstance(movimientos, list):
-            return "❌ Formato inválido de Gemini"
 
         resultados = []
 
         for d in movimientos:
 
+            d = reparar_datos(mensaje, d)
+            d["tipo"] = forzar_tipo(mensaje, d.get("tipo", ""))
+
             cuenta = d.get("cuenta", "No especificada").lower().strip()
+            d["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
 
-            # ==========================
-            # CUENTA FALTANTE → PREGUNTA
-            # ==========================
+            if d["cuenta"] == "No especificada" and chat_id:
+                pending_movements[chat_id] = d
+                return "🤔 ¿Qué cuenta fue? (Nequi, Nu, Davivienda, Bancolombia, Efectivo, Splitwise)"
 
-            if cuenta == "no especificada":
-                if chat_id:
-                    pending_movements[chat_id] = d
-                    return "🤔 ¿Qué cuenta fue? (Nequi, Nu, Davivienda, Bancolombia, Efectivo, Splitwise)"
-                else:
-                    d["cuenta"] = "No especificada"
-            else:
-                d["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
+            recibido = guardar_movimiento(d)
+            resultados.append(recibido)
 
-            guardar_movimiento(d)
-            resultados.append(d)
-
-        return f"✅ Guardado {len(resultados)} movimiento(s)"
+        return "\n\n".join([
+            f"""🧾 Movimiento:
+📂 {r['categoria']}
+📝 {r['descripcion']}
+💰 {r['monto']}
+🏦 {r['cuenta']}"""
+            for r in resultados
+        ])
 
     except Exception as e:
-        print("❌ ERROR COMPLETO:", str(e))
+        print("❌ ERROR:", str(e))
         return "❌ Error procesando mensaje"
