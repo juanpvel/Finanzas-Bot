@@ -6,6 +6,7 @@ import re
 import gspread
 from google.oauth2.service_account import Credentials
 from google import genai
+import dateparser
 
 
 # ==========================
@@ -27,7 +28,7 @@ pending_movements = {}
 
 
 # ==========================
-# CONTEXTO (TU ORIGINAL + OPTIMIZADO)
+# CONTEXTO
 # ==========================
 
 contexto_usuario = """
@@ -65,24 +66,17 @@ Regalos
 Servicios (Agua, luz, internet, celular)
 Transporte (Uber, taxi, bus)
 Uma (Gastos de la perrita)
-Vivienda (Arriendo y administraicón)
+Vivienda (Arriendo y administración)
 Planilla
 Casa
-Streaming (Netflix, Disney+, etc.)
+Streaming
 Paseos
-Disco (Producción de música de proyecto personal)
+Disco
 Aseo
-Moshiplanes (Actividades de ocio con mi espeosa)
+Moshiplanes
 
 CATEGORÍAS INGRESO:
-P&S
-Divan
-Peña
-Clases
-Juan Pablo Luna
-Audio
-
-Para escribir el JSON, ignora las descripciones de las categorías y usa solo el nombre de la categoría.
+P&S, Divan, Peña, Clases, Juan Pablo Luna, Audio
 
 CUENTAS:
 Nequi, Nu, Davivienda, Bancolombia, Efectivo, Splitwise
@@ -95,6 +89,26 @@ CONVERSIONES:
 50k → 50000
 23 mil → 23000
 """
+
+
+# ==========================
+# FECHAS NATURALES 🆕
+# ==========================
+
+def resolver_fecha(mensaje):
+
+    fecha = dateparser.parse(
+        mensaje,
+        languages=["es"],
+        settings={
+            "RELATIVE_BASE": datetime.now()
+        }
+    )
+
+    if fecha:
+        return fecha.strftime("%Y-%m-%d")
+
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 # ==========================
@@ -202,12 +216,12 @@ def forzar_tipo(mensaje):
 
 
 # ==========================
-# GUARDAR
+# GUARDAR (ACTUALIZADO CON FECHA INTELIGENTE)
 # ==========================
 
 def guardar(d):
 
-    fecha = datetime.now().strftime("%Y-%m-%d")
+    fecha = resolver_fecha(d.get("descripcion", ""))  # 🆕 cambio clave
 
     cuenta = d.get("cuenta", "No especificada").lower().strip()
     cuenta = cuentas_validas.get(cuenta, "No especificada")

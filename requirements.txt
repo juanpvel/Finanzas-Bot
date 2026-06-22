@@ -3,3 +3,4 @@ gspread
 google-auth
 google-genai
 requests
+dateparser
