@@ -344,7 +344,7 @@ def procesar_mensaje(mensaje, chat_id=None):
                     "Nequi\nNu\nDavivienda\nBancolombia\nEfectivo\nSplitwise"
                 )
 
-            resultados.append(guardar(d))
+            resultados.append(guardar(d, mensaje))
 
         return "\n\n".join([
             f"""🧾 Movimiento:
