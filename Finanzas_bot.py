@@ -47,10 +47,11 @@ Reglas:
 - NO texto adicional
 - Si falla, devuelve []
 
+REGLA PRIORITARIA:
+Si el texto indica ingreso (ej: ingresé, llegó, entró, recibí, pagaron, consignaron, depositaron, cobré, gané, vendí, transfirieron) → tipo = ingreso
+
 INGRESOS:
-ingreso, ingresé, me llegó, me llegaron, me entró, recibí,
-me pagaron, me consignaron, me depositaron, cobré, gané,
-vendí, me transfirieron, me cayó
+ingreso, ingresé, me llegó, me llegaron, me entró, recibí, me pagaron, me consignaron, me depositaron, cobré, gané, vendí, me transfirieron, me cayó
 
 CATEGORÍAS GASTO:
 Antojos (cafés, postres)
@@ -72,12 +73,17 @@ Planilla
 Casa
 Streaming
 Paseos
-Disco
-Aseo
-Moshiplanes
+Disco (inversión por disco)
+Aseo (Alguien viene a hacer aseo a la casa)
+Moshiplanes (Ocio con mi esposa)
 
 CATEGORÍAS INGRESO:
-P&S, Divan, Peña, Clases, Juan Pablo Luna, Audio
+P&S (Utilidades de prestamos)
+Diván (Por eventos de micrófono abierto y muestras del taller del diván)
+Peña (eventos, conciertos y actividades de Pedro Bombo y la Peña)
+Clases (Clases universidad del bosque, y clases particulares)
+Juan Pablo Luna (Eventos, conciertos y merch de Juan Pablo Luna)
+Audio (Mezcla, producción, masterización y edición de audio)
 
 CUENTAS:
 Nequi, Nu, Davivienda, Bancolombia, Efectivo, Splitwise
@@ -98,7 +104,7 @@ CONVERSIONES:
 
 def resolver_fecha(mensaje):
 
-    base = datetime.now(ZoneInfo("America/Bogota")).replace(microsecond=0)
+    base = datetime.now(ZoneInfo("America/Bogota")).replace(tzinfo=None, microsecond=0)
 
     fecha = dateparser.parse(
         mensaje,
@@ -161,16 +167,23 @@ cuentas_validas = {
 # ==========================
 
 def extraer_json(texto):
-    texto = texto.strip()
-    texto = texto.replace("```json", "").replace("```", "").strip()
+    texto = texto.strip().replace("```json", "").replace("```", "").strip()
 
-    start = texto.find("[")
-    end = texto.rfind("]")
+    matches = re.findall(r"\[[\s\S]*?\]", texto)
 
-    if start == -1 or end == -1:
-        raise ValueError(f"No JSON encontrado:\n{texto}")
+    if not matches:
+        raise ValueError("No JSON encontrado")
 
-    return json.loads(texto[start:end+1])
+    # prioriza el más grande (más probable que sea el real)
+    matches.sort(key=len, reverse=True)
+
+    for bloque in matches:
+        try:
+            return json.loads(bloque)
+        except json.JSONDecodeError:
+            continue
+
+    raise ValueError("Ningún JSON válido encontrado")
 
 
 # ==========================
@@ -226,9 +239,8 @@ def forzar_tipo(mensaje):
 # GUARDAR
 # ==========================
 
-def guardar(d):
-
-    fecha = resolver_fecha(d.get("descripcion", ""))
+def guardar(d, mensaje_original):
+    fecha = resolver_fecha(mensaje_original)
 
     cuenta = d.get("cuenta", "No especificada").lower().strip()
     cuenta = cuentas_validas.get(cuenta, "No especificada")
