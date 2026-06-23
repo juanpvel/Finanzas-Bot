@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import os
 import re
 
@@ -97,19 +98,24 @@ CONVERSIONES:
 
 def resolver_fecha(mensaje):
 
+    base = datetime.now(ZoneInfo("America/Bogota")).replace(microsecond=0)
+
     fecha = dateparser.parse(
         mensaje,
         languages=["es"],
         settings={
-            "RELATIVE_BASE": datetime.now(),
-            "PREFER_DATES_FROM": "past"   # 👈 FIX IMPORTANTE
+            "RELATIVE_BASE": base,
+            "TIMEZONE": "America/Bogota",
+            "TO_TIMEZONE": "America/Bogota",
+            "RETURN_AS_TIMEZONE_AWARE": False,
+            "PREFER_DATES_FROM": "past"
         }
     )
 
     if fecha:
         return fecha.strftime("%Y-%m-%d")
 
-    return datetime.now().strftime("%Y-%m-%d")
+    return base.strftime("%Y-%m-%d")
 
 
 # ==========================
@@ -201,15 +207,15 @@ def forzar_tipo(mensaje):
 
     ingresos = [
         "ingreso", "ingresé", "ingrese",
-        "me llegó", "me llego", "me llegaron",
-        "me entró", "me entro",
+        "llegaron", "llegó","me llegó", "me llego", "me llegaron",
+        "entro", "entró", "me entró", "me entro",
         "recibí", "recibi",
         "me pagaron", "me consignaron",
-        "me depositaron",
+        "depositaron", "me depositaron",
         "cobré", "cobre",
         "gané", "gane",
         "vendí", "vendi",
-        "me transfirieron",
+        "transfirieron", "me transfirieron",
         "me cayó", "me cayo"
     ]
 
@@ -330,6 +336,10 @@ def procesar_mensaje(mensaje, chat_id=None):
 
         return "\n\n".join([
             f"""🧾 Movimiento:
+
+📅 {r.get('fecha', '')}
+💸 {r['tipo'].capitalize()}
+
 📂 {r['categoria']}
 📝 {r['descripcion']}
 💰 {r['monto']}
