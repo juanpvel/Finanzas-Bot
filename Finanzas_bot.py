@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from datetime import timedelta
 from zoneinfo import ZoneInfo
 import os
 import re
@@ -104,19 +105,30 @@ CONVERSIONES:
 
 def resolver_fecha(mensaje):
 
-    base = datetime.now(ZoneInfo("America/Bogota")).replace(tzinfo=None, microsecond=0)
+    base = datetime.now(ZoneInfo("America/Bogota")).replace(microsecond=0)
 
+    texto = mensaje.lower()
+
+    # 🧠 manejo explícito (más confiable que dateparser)
+    if "anteayer" in texto:
+        return (base - timedelta(days=2)).strftime("%Y-%m-%d")
+
+    if "ayer" in texto:
+        return (base - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if "hoy" in texto:
+        return base.strftime("%Y-%m-%d")
+
+    # fallback: dateparser solo para fechas explícitas tipo "12 de junio"
     fecha = dateparser.parse(
-        mensaje,
-        languages=["es"],
-        settings={
-            "RELATIVE_BASE": base,
-            "TIMEZONE": "America/Bogota",
-            "TO_TIMEZONE": "America/Bogota",
-            "RETURN_AS_TIMEZONE_AWARE": False,
-            "PREFER_DATES_FROM": "past"
-        }
-    )
+    mensaje,
+    languages=["es"],
+    settings={
+        "RELATIVE_BASE": base,
+        "PREFER_DATES_FROM": "past",
+        "STRICT_PARSING": False
+    }
+)
 
     if fecha:
         return fecha.strftime("%Y-%m-%d")
@@ -221,7 +233,7 @@ def forzar_tipo(mensaje):
     ingresos = [
         "ingreso", "ingresé", "ingrese",
         "llegaron", "llegó","me llegó", "me llego", "me llegaron",
-        "entro", "entró", "me entró", "me entro",
+        "entraron", "entro", "entró", "me entró", "me entro",
         "recibí", "recibi",
         "me pagaron", "me consignaron",
         "depositaron", "me depositaron",
