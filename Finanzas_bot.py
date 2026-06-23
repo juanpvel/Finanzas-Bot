@@ -1,9 +1,13 @@
+import threading
+lock = threading.Lock()
 import json
 from datetime import datetime
 from datetime import timedelta
 from zoneinfo import ZoneInfo
 import os
 import re
+import time
+import random
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -34,68 +38,79 @@ pending_movements = {}
 # ==========================
 
 contexto_usuario = """
-Extrae movimientos financieros y devuelve SOLO JSON válido (lista).
+TASK: Extract financial transactions from text.
 
-Campos:
-- categoria
-- descripcion
-- monto
-- cuenta
+OUTPUT (STRICT):
+Return ONLY valid JSON array.
+No markdown. No explanation.
 
-Reglas:
-- Puede haber uno o varios movimientos
-- Si no hay ingreso explícito → gasto
-- NO texto adicional
-- Si falla, devuelve []
+Schema:
+[
+  {
+    "categoria": "string",
+    "descripcion": "string",
+    "monto": number,
+    "cuenta": "string",
+    "tipo": "gasto | ingreso"
+  }
+]
 
-REGLA PRIORITARIA:
-Si el texto indica ingreso (ej: ingresé, llegó, entró, recibí, pagaron, consignaron, depositaron, cobré, gané, vendí, transfirieron) → tipo = ingreso
+RULES:
+- Can return 1 or multiple transactions
+- If no explicit income signal → tipo = "gasto"
+- If parsing fails → return []
 
-INGRESOS:
-ingreso, ingresé, me llegó, me llegaron, me entró, recibí, me pagaron, me consignaron, me depositaron, cobré, gané, vendí, me transfirieron, me cayó
+INCOME DETECTION:
+ingresé, llegó, entró, recibí, pagaron, consignaron, depositaron, cobré, gané, vendí, transfirieron, me cayó
+→ tipo = "ingreso"
 
 CATEGORÍAS GASTO:
-Antojos (cafés, postres)
-Comida afuera (restaurantes)
-Deporte (escalada, magnesio)
-Enfermedades (medicinas)
-Inversión estudio (audio, equipos)
-Mambe (mambe, ambil y domicilios relacionados)
-Mercado (supermercado)
-Moto (gasolina, taller)
-Panaderia (pan)
-Para mi (Compras de objetos personales)
-Regalos
-Servicios (Agua, luz, internet, celular)
-Transporte (Uber, taxi, bus)
-Uma (Gastos de la perrita)
-Vivienda (Arriendo y administración)
-Planilla
-Casa
-Streaming
-Paseos
-Disco (inversión por disco)
-Aseo (Alguien viene a hacer aseo a la casa)
-Moshiplanes (Ocio con mi esposa)
+Antojos: cafés, postres, snacks, jugos, helados, dulces
+Comida afuera: restaurantes, almuerzos, domicilios
+Deporte: escalada, gimnasio, magnesio, deporte en general
+Enfermedades: medicinas, salud, tratamientos
+Inversión estudio: audio, equipos, plugins, cables
+Mambe: mambe, ambil y domicilios relacionados
+Mercado: supermercado, comida para preparar, compras del hogar
+Moto: gasolina, mantenimiento, taller
+Panaderia: pan
+Para mi: compras personales no esenciales, no comida
+Regalos: obsequios
+Servicios: agua, luz, internet, celular, claro
+Transporte: uber, taxi, bus, transporte urbano
+Uma: gastos de la perrita
+Vivienda: arriendo, administración, vivienda
+Planilla: pagos de nómina o seguridad social
+Para la Casa: muebles, objetos del hogar
+Streaming: suscripciones digitales
+Paseos: viajes, salidas
+Disco: inversión en proyecto musical Juan Pablo Luna
+Aseo: limpieza del hogar
+Moshiplanes: ocio con esposa
 
 CATEGORÍAS INGRESO:
-P&S (Utilidades de prestamos)
-Diván (Por eventos de micrófono abierto y muestras del taller del diván)
-Peña (eventos, conciertos y actividades de Pedro Bombo y la Peña)
-Clases (Clases universidad del bosque, y clases particulares)
-Juan Pablo Luna (Eventos, conciertos y merch de Juan Pablo Luna)
-Audio (Mezcla, producción, masterización y edición de audio)
+P&S: utilidades de préstamos
+Diván: eventos de micrófono abierto / talleres del Diván
+Peña: eventos musicales de Pedro Bombo / la Peña
+Clases: clases universitarias o particulares
+Juan Pablo Luna: conciertos, shows, merch del proyecto artístico
+Audio: mezcla, producción, masterización, edición de audio
 
-CUENTAS:
+ACCOUNTS:
 Nequi, Nu, Davivienda, Bancolombia, Efectivo, Splitwise
 
-Si no hay cuenta:
-"cuenta": "No especificada"
+ACCOUNT RULE:
+If account not recognized → "No especificada"
 
-CONVERSIONES:
-18 lucas → 18000
-50k → 50000
-23 mil → 23000
+MONEY NORMALIZATION:
+"18 lucas" = 18000
+"50k" = 50000
+"23 mil" = 23000
+
+STRICT:
+- JSON only
+- no extra text
+- all fields required
 """
 
 
@@ -121,7 +136,7 @@ def resolver_fecha(mensaje):
 
     # fallback: dateparser solo para fechas explícitas tipo "12 de junio"
     fecha = dateparser.parse(
-    mensaje,
+        mensaje,
     languages=["es"],
     settings={
         "RELATIVE_BASE": base,
@@ -279,7 +294,7 @@ def guardar(d, mensaje_original):
 # GEMINI
 # ==========================
 
-def llamar_gemini(mensaje):
+def llamar_gemini(mensaje, retries=4):
 
     prompt = f"""
 {contexto_usuario}
@@ -290,19 +305,62 @@ Mensaje:
 Devuelve SOLO JSON.
 """
 
-    response = client_genai.models.generate_content(
-        model="gemini-2.5-flash-lite",
-        contents=prompt,
-        config={
-            "temperature": 0,
-            "max_output_tokens": 200
-        }
-    )
+    for i in range(retries):
 
-    if not response or not response.text:
-        raise ValueError("Gemini no respondió")
+        try:
 
-    return response.text
+            response = client_genai.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=prompt,
+                config={
+                    "temperature": 0,
+                    "max_output_tokens": 120
+                }
+            )
+
+            if response and response.text:
+                return response.text
+
+            raise ValueError("Empty response")
+
+        except Exception as e:
+
+            error_text = str(e)
+
+            # Solo reintentar errores temporales
+            errores_temporales = [
+                "503",
+                "UNAVAILABLE",
+                "429",
+                "RESOURCE_EXHAUSTED",
+                "Deadline Exceeded",
+                "Internal Server Error"
+            ]
+
+            es_temporal = any(
+                x.lower() in error_text.lower()
+                for x in errores_temporales
+            )
+
+            if not es_temporal:
+                print(f"❌ Error no recuperable: {error_text}")
+                raise
+
+            if i == retries - 1:
+                print(f"❌ Gemini falló tras {retries} intentos")
+                raise
+
+            wait = (2 ** i) + random.uniform(0.3, 1.2)
+
+            print(
+                f"⚠️ Gemini error temporal ({i+1}/{retries}): "
+                f"{error_text}"
+            )
+            print(f"⏳ Reintentando en {wait:.2f}s")
+
+            time.sleep(wait)
+
+    raise ValueError("Gemini falló después de varios reintentos")
 
 
 # ==========================
@@ -311,20 +369,32 @@ Devuelve SOLO JSON.
 
 def procesar_mensaje(mensaje, chat_id=None):
 
-    try:
+    with lock:
 
-        print("\n📥 MENSAJE:", mensaje)
+        try:
+            print("\n📥 MENSAJE:", mensaje)
 
-        if chat_id and chat_id in pending_movements:
+            # ==========================
+            # RESPUESTA A CUENTA PENDIENTE
+            # ==========================
+            if chat_id and chat_id in pending_movements:
 
-            mov = pending_movements.pop(chat_id)
+                pendiente = pending_movements.pop(chat_id)
 
-            cuenta = mensaje.lower().strip()
-            mov["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
+                mov = pendiente["movimiento"]
+                mensaje_original = pendiente["mensaje_original"]
 
-            saved = guardar(mov)
+                mov["cuenta"] = cuentas_validas.get(
+                    mensaje.lower().strip(),
+                    "No especificada"
+                )
 
-            return f"""
+                saved = guardar(
+                    mov,
+                    mensaje_original
+                )
+
+                return f"""
 ✅ Movimiento guardado
 
 🧾 {saved['descripcion']}
@@ -332,34 +402,62 @@ def procesar_mensaje(mensaje, chat_id=None):
 🏦 {saved['cuenta']}
 """.strip()
 
-        raw = llamar_gemini(mensaje)
-        print("🤖 RAW:", raw)
+            # ==========================
+            # GEMINI
+            # ==========================
+            raw = llamar_gemini(mensaje)
+            print("🤖 RAW:", raw)
 
-        movimientos = extraer_json(raw)
+            movimientos = extraer_json(raw)
+            tipo = forzar_tipo(mensaje)
 
-        tipo = forzar_tipo(mensaje)
-        resultados = []
+            resultados = []
 
-        for d in movimientos:
+            # ==========================
+            # PROCESAR MOVIMIENTOS
+            # ==========================
+            for d in movimientos:
 
-            d = reparar(mensaje, d)
-            d["tipo"] = tipo
+                d = reparar(mensaje, d)
+                d["tipo"] = tipo
 
-            cuenta = d.get("cuenta", "No especificada").lower().strip()
-            d["cuenta"] = cuentas_validas.get(cuenta, "No especificada")
-
-            if d["cuenta"] == "No especificada" and chat_id:
-                pending_movements[chat_id] = d
-
-                return (
-                    "🤔 ¿Qué cuenta fue?\n\n"
-                    "Nequi\nNu\nDavivienda\nBancolombia\nEfectivo\nSplitwise"
+                cuenta = (
+                    d.get("cuenta", "No especificada")
+                    .lower()
+                    .strip()
                 )
 
-            resultados.append(guardar(d, mensaje))
+                d["cuenta"] = cuentas_validas.get(
+                    cuenta,
+                    "No especificada"
+                )
 
-        return "\n\n".join([
-            f"""🧾 Movimiento:
+                if d["cuenta"] == "No especificada" and chat_id:
+
+                    pending_movements[chat_id] = {
+                        "movimiento": d,
+                        "mensaje_original": mensaje
+                    }
+
+                    return (
+                        "🤔 ¿Qué cuenta fue?\n\n"
+                        "Nequi\n"
+                        "Nu\n"
+                        "Davivienda\n"
+                        "Bancolombia\n"
+                        "Efectivo\n"
+                        "Splitwise"
+                    )
+
+                resultados.append(
+                    guardar(d, mensaje)
+                )
+
+            # ==========================
+            # RESPUESTA FINAL
+            # ==========================
+            return "\n\n".join([
+                f"""🧾 Movimiento:
 
 📅 {r.get('fecha', '')}
 💸 {r['tipo'].capitalize()}
@@ -368,9 +466,9 @@ def procesar_mensaje(mensaje, chat_id=None):
 📝 {r['descripcion']}
 💰 {r['monto']}
 🏦 {r['cuenta']}"""
-            for r in resultados
-        ])
+                for r in resultados
+            ])
 
-    except Exception as e:
-        print("❌ ERROR:", repr(e))
-        return f"⚠️ Error: {str(e)}"
+        except Exception as e:
+            print("❌ ERROR:", repr(e))
+            return f"⚠️ Error: {str(e)}"
