@@ -50,8 +50,7 @@ Schema:
     "categoria": "string",
     "descripcion": "string",
     "monto": number,
-    "cuenta": "string",
-    "tipo": "gasto | ingreso"
+    "cuenta": "string | null"
   }
 ]
 
@@ -60,9 +59,6 @@ RULES:
 - If no explicit income signal → tipo = "gasto"
 - If parsing fails → return []
 
-INCOME DETECTION:
-ingresé, llegó, entró, recibí, pagaron, consignaron, depositaron, cobré, gané, vendí, transfirieron, me cayó
-→ tipo = "ingreso"
 
 CATEGORÍAS GASTO:
 Antojos: cafés, postres, snacks, jugos, helados, dulces
@@ -269,7 +265,7 @@ def forzar_tipo(mensaje):
 def guardar(d, mensaje_original):
     fecha = resolver_fecha(mensaje_original)
 
-    cuenta = d.get("cuenta", "No especificada").lower().strip()
+    cuenta = (d.get("cuenta") or "No especificada").lower().strip()
     cuenta = cuentas_validas.get(cuenta, "No especificada")
 
     fila = [
@@ -305,10 +301,11 @@ Mensaje:
 Devuelve SOLO JSON.
 """
 
+    retry_count = 0
+
     for i in range(retries):
 
         try:
-
             response = client_genai.models.generate_content(
                 model="gemini-2.5-flash-lite",
                 contents=prompt,
@@ -319,7 +316,7 @@ Devuelve SOLO JSON.
             )
 
             if response and response.text:
-                return response.text
+                return response.text, i
 
             raise ValueError("Empty response")
 
@@ -327,7 +324,6 @@ Devuelve SOLO JSON.
 
             error_text = str(e)
 
-            # Solo reintentar errores temporales
             errores_temporales = [
                 "503",
                 "UNAVAILABLE",
@@ -346,21 +342,17 @@ Devuelve SOLO JSON.
                 print(f"❌ Error no recuperable: {error_text}")
                 raise
 
+            retry_count += 1
+
             if i == retries - 1:
-                print(f"❌ Gemini falló tras {retries} intentos")
                 raise
 
             wait = (2 ** i) + random.uniform(0.3, 1.2)
 
-            print(
-                f"⚠️ Gemini error temporal ({i+1}/{retries}): "
-                f"{error_text}"
-            )
-            print(f"⏳ Reintentando en {wait:.2f}s")
-
+            print(f"⚠️ Retry {retry_count}: {error_text}")
             time.sleep(wait)
 
-    raise ValueError("Gemini falló después de varios reintentos")
+    raise ValueError("Gemini falló después de varios intentos")
 
 
 # ==========================
@@ -384,15 +376,20 @@ def procesar_mensaje(mensaje, chat_id=None):
                 mov = pendiente["movimiento"]
                 mensaje_original = pendiente["mensaje_original"]
 
+                # 1. normalizar primero TODO el movimiento
+                mov = reparar(mensaje_original, mov)
+
+                # 2. asignar tipo
+                mov["tipo"] = forzar_tipo(mensaje_original)
+
+                # 3. resolver cuenta
                 mov["cuenta"] = cuentas_validas.get(
                     mensaje.lower().strip(),
                     "No especificada"
                 )
 
-                saved = guardar(
-                    mov,
-                    mensaje_original
-                )
+                # 4. guardar
+                saved = guardar(mov, mensaje_original)
 
                 return f"""
 ✅ Movimiento guardado
@@ -405,10 +402,15 @@ def procesar_mensaje(mensaje, chat_id=None):
             # ==========================
             # GEMINI
             # ==========================
-            raw = llamar_gemini(mensaje)
-            print("🤖 RAW:", raw)
+            raw, retries = llamar_gemini(mensaje)
+            print(f"🔁 Retries usados: {retries}")
 
-            movimientos = extraer_json(raw)
+            try:
+                movimientos = extraer_json(raw)
+            except Exception as e:
+                print("❌ JSON PARSE ERROR:", e)
+                return "⚠️ No pude entender la transacción. Intenta de nuevo."
+            
             tipo = forzar_tipo(mensaje)
 
             resultados = []
@@ -422,7 +424,7 @@ def procesar_mensaje(mensaje, chat_id=None):
                 d["tipo"] = tipo
 
                 cuenta = (
-                    d.get("cuenta", "No especificada")
+                    (d.get("cuenta") or "No especificada")
                     .lower()
                     .strip()
                 )
@@ -453,9 +455,6 @@ def procesar_mensaje(mensaje, chat_id=None):
                     guardar(d, mensaje)
                 )
 
-            # ==========================
-            # RESPUESTA FINAL
-            # ==========================
             return "\n\n".join([
                 f"""🧾 Movimiento:
 
@@ -466,8 +465,8 @@ def procesar_mensaje(mensaje, chat_id=None):
 📝 {r['descripcion']}
 💰 {r['monto']}
 🏦 {r['cuenta']}"""
-                for r in resultados
-            ])
+    for r in resultados
+]) + f"\n\n⚙️ retries: {retries}"
 
         except Exception as e:
             print("❌ ERROR:", repr(e))
