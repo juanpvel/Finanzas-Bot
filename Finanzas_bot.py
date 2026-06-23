@@ -92,7 +92,7 @@ CONVERSIONES:
 
 
 # ==========================
-# FECHAS NATURALES 🆕
+# FECHAS NATURALES 🆕 (MEJORA PRO)
 # ==========================
 
 def resolver_fecha(mensaje):
@@ -101,7 +101,8 @@ def resolver_fecha(mensaje):
         mensaje,
         languages=["es"],
         settings={
-            "RELATIVE_BASE": datetime.now()
+            "RELATIVE_BASE": datetime.now(),
+            "PREFER_DATES_FROM": "past"   # 👈 FIX IMPORTANTE
         }
     )
 
@@ -216,12 +217,12 @@ def forzar_tipo(mensaje):
 
 
 # ==========================
-# GUARDAR (ACTUALIZADO CON FECHA INTELIGENTE)
+# GUARDAR
 # ==========================
 
 def guardar(d):
 
-    fecha = resolver_fecha(d.get("descripcion", ""))  # 🆕 cambio clave
+    fecha = resolver_fecha(d.get("descripcion", ""))
 
     cuenta = d.get("cuenta", "No especificada").lower().strip()
     cuenta = cuentas_validas.get(cuenta, "No especificada")
@@ -284,7 +285,6 @@ def procesar_mensaje(mensaje, chat_id=None):
 
         print("\n📥 MENSAJE:", mensaje)
 
-        # CUENTA PENDIENTE
         if chat_id and chat_id in pending_movements:
 
             mov = pending_movements.pop(chat_id)
@@ -302,7 +302,6 @@ def procesar_mensaje(mensaje, chat_id=None):
 🏦 {saved['cuenta']}
 """.strip()
 
-        # GEMINI
         raw = llamar_gemini(mensaje)
         print("🤖 RAW:", raw)
 
